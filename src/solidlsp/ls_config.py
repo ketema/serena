@@ -53,6 +53,7 @@ class Language(str, Enum):
     NIX = "nix"
     ERLANG = "erlang"
     AL = "al"
+    HASKELL = "haskell"
     # Experimental or deprecated Language Servers
     TYPESCRIPT_VTS = "typescript_vts"
     """Use the typescript language server through the natively bundled vscode extension via https://github.com/yioneko/vtsls"""
@@ -241,6 +242,10 @@ class Language(str, Enum):
                 from solidlsp.language_servers.al_language_server import ALLanguageServer
 
                 return ALLanguageServer
+            case self.HASKELL:
+                from solidlsp.language_servers.haskell_language_server import HaskellLanguageServer
+
+                return HaskellLanguageServer
             case self.R:
                 from solidlsp.language_servers.r_language_server import RLanguageServer
 
