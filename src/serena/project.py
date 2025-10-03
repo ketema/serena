@@ -102,6 +102,16 @@ class Project(ToStringMixin):
     def project_name(self) -> str:
         return self.project_config.project_name
 
+    @property
+    def language(self) -> Language:
+        """Returns first language for backward compatibility."""
+        return self.project_config.language
+
+    @property
+    def languages(self) -> list[Language]:
+        """Returns all languages configured for this project."""
+        return self.project_config.languages
+
     @classmethod
     def load(cls, project_root: str | Path, autogenerate: bool = True) -> "Project":
         project_root = Path(project_root).resolve()
@@ -358,7 +368,42 @@ class Project(ToStringMixin):
             source_file_path=relative_file_path,
         )
 
-    def create_language_server_manager(
+    def create_lsp_manager(
+        self,
+        log_level: int = logging.INFO,
+        ls_timeout: float | None = DEFAULT_TOOL_TIMEOUT - 5,
+        trace_lsp_communication: bool = False,
+        ls_specific_settings: dict[Language, Any] | None = None,
+    ) -> "LSPManager":
+        """
+        Create an LSPManager for managing multiple language servers (polyglot support).
+
+        :param log_level: the log level for the language servers
+        :param ls_timeout: the timeout for the language servers
+        :param trace_lsp_communication: whether to trace LSP communication
+        :param ls_specific_settings: optional LS specific configuration per language
+        :return: the LSPManager instance
+        """
+        from serena.lsp_manager import LSPManager
+
+        ls_logger = LanguageServerLogger(log_level=log_level)
+        settings = SolidLSPSettings(
+            solidlsp_dir=SERENA_MANAGED_DIR_IN_HOME,
+            project_data_relative_path=SERENA_MANAGED_DIR_NAME,
+            ls_specific_settings=ls_specific_settings or {},
+        )
+
+        log.info(f"Creating LSPManager for {len(self.languages)} languages: {[lang.value for lang in self.languages]}")
+        return LSPManager(
+            languages=self.languages,
+            project_root=self.project_root,
+            config=self.project_config,
+            logger=ls_logger,
+            settings=settings,
+            timeout=ls_timeout,
+        )
+
+    def create_language_server(
         self,
         log_level: int = logging.INFO,
         ls_timeout: float | None = DEFAULT_TOOL_TIMEOUT - 5,
@@ -368,6 +413,11 @@ class Project(ToStringMixin):
         """
         Creates the language server manager for the project, starting one language server per configured programming language.
 
+        DEPRECATED: Use create_lsp_manager() for polyglot support.
+        This method creates a single LSP for the first language (backward compatibility).
+
+        :param project: either a path to the project root or a ProjectConfig instance.
+            If no project.yml is found, the default project configuration will be used.
         :param log_level: the log level for the language server
         :param ls_timeout: the timeout for the language server
         :param trace_lsp_communication: whether to trace LSP communication
