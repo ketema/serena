@@ -1,5 +1,5 @@
 import inspect
-import json
+import os
 from abc import ABC
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -44,11 +44,37 @@ class Component(ABC):
     def memories_manager(self) -> "MemoriesManager":
         return self.project.memories_manager
 
-    def create_language_server_symbol_retriever(self) -> LanguageServerSymbolRetriever:
+    def create_language_server_symbol_retriever(self, file_path: str | None = None) -> LanguageServerSymbolRetriever:
+        """
+        Create a LanguageServerSymbolRetriever for symbol operations.
+
+        Args:
+            file_path: Optional file path for routing to correct LSP in polyglot projects.
+                      If None, uses agent.language_server (backward compatibility).
+
+        Returns:
+            LanguageServerSymbolRetriever configured for the appropriate LSP
+
+        Raises:
+            Exception: If agent is not in language server mode
+            Exception: If file_path provided but no LSP found for that file
+        """
         if not self.agent.is_using_language_server():
             raise Exception("Cannot create LanguageServerSymbolRetriever; agent is not in language server mode.")
-        language_server_manager = self.agent.get_language_server_manager_or_raise()
-        return LanguageServerSymbolRetriever(language_server_manager, agent=self.agent)
+
+        # Route to correct LSP based on file_path (polyglot support)
+        if file_path is not None:
+            language_server = self.agent.get_language_server_for_file(file_path)
+            if language_server is None:
+                raise Exception(
+                    f"Cannot create LanguageServerSymbolRetriever for file '{file_path}': " f"no language server found for this file type."
+                )
+        else:
+            # Backward compatibility: use default language_server
+            language_server = self.agent.language_server
+            assert language_server is not None
+
+        return LanguageServerSymbolRetriever(language_server, agent=self.agent)
 
     @property
     def project(self) -> Project:
@@ -238,29 +264,23 @@ class Tool(Component):
             try:
                 # check whether the tool requires an active project and language server
                 if not isinstance(self, ToolMarkerDoesNotRequireActiveProject):
-                    if self.agent.get_active_project() is None:
+                    if self.agent._active_project is None:
                         return (
                             "Error: No active project. Ask the user to provide the project path or to select a project from this list of known projects: "
                             + f"{self.agent.serena_config.project_names}"
                         )
+                    if self.agent.is_using_language_server() and not self.agent.is_language_server_running():
+                        log.info("Language server is not running. Starting it ...")
+                        self.agent.reset_language_server()
 
                 # apply the actual tool
                 try:
                     result = apply_fn(**kwargs)
                 except SolidLSPException as e:
                     if e.is_language_server_terminated():
-                        affected_language = e.get_affected_language()
-                        if affected_language is not None:
-                            log.error(
-                                f"Language server terminated while executing tool ({e}). Restarting the language server and retrying ..."
-                            )
-                            self.agent.get_language_server_manager_or_raise().restart_language_server(affected_language)
-                            result = apply_fn(**kwargs)
-                        else:
-                            log.error(
-                                f"Language server terminated while executing tool ({e}), but affected language is unknown. Not retrying."
-                            )
-                            raise
+                        log.error(f"Language server terminated while executing tool ({e}). Restarting the language server and retrying ...")
+                        self.agent.reset_language_server()
+                        result = apply_fn(**kwargs)
                     else:
                         raise
 
@@ -270,7 +290,7 @@ class Tool(Component):
             except Exception as e:
                 if not catch_exceptions:
                     raise
-                msg = f"Error executing tool: {e.__class__.__name__} - {e}"
+                msg = f"Error executing tool: {e}"
                 log.error(f"Error executing tool: {e}", exc_info=e)
                 result = msg
 
@@ -278,26 +298,15 @@ class Tool(Component):
                 log.info(f"Result: {result}")
 
             try:
-                ls_manager = self.agent.get_language_server_manager()
-                if ls_manager is not None:
-                    ls_manager.save_all_caches()
+                if self.agent.language_server is not None:
+                    self.agent.language_server.save_cache()
             except Exception as e:
                 log.error(f"Error saving language server cache: {e}")
 
             return result
 
-        # execute the tool in the agent's task executor, with timeout
-        try:
-            task_exec = self.agent.issue_task(task, name=self.__class__.__name__)
-            return task_exec.result(timeout=self.agent.serena_config.tool_timeout)
-        except Exception as e:  # typically TimeoutError (other exceptions caught in task)
-            msg = f"Error: {e.__class__.__name__} - {e}"
-            log.error(msg)
-            return msg
-
-    @staticmethod
-    def _to_json(x: Any) -> str:
-        return json.dumps(x, ensure_ascii=False)
+        future = self.agent.issue_task(task, name=self.__class__.__name__)
+        return future.result(timeout=self.agent.serena_config.tool_timeout)
 
 
 class EditedFileContext:
@@ -309,23 +318,24 @@ class EditedFileContext:
     When exiting the context without an exception, the updated content will be written back to the file.
     """
 
-    def __init__(self, relative_path: str, code_editor: "CodeEditor"):
-        self._relative_path = relative_path
-        self._code_editor = code_editor
-        self._edited_file: CodeEditor.EditedFile | None = None
-        self._edited_file_context: Any = None
+    def __init__(self, relative_path: str, agent: "SerenaAgent"):
+        self._project = agent.get_active_project()
+        assert self._project is not None
+        self._abs_path = os.path.join(self._project.project_root, relative_path)
+        if not os.path.isfile(self._abs_path):
+            raise FileNotFoundError(f"File {self._abs_path} does not exist.")
+        with open(self._abs_path, encoding=self._project.project_config.encoding) as f:
+            self._original_content = f.read()
+        self._updated_content: str | None = None
 
     def __enter__(self) -> Self:
-        self._edited_file_context = self._code_editor.edited_file_context(self._relative_path)
-        self._edited_file = self._edited_file_context.__enter__()
         return self
 
     def get_original_content(self) -> str:
         """
         :return: the original content of the file before any modifications.
         """
-        assert self._edited_file is not None
-        return self._edited_file.get_contents()
+        return self._original_content
 
     def set_updated_content(self, content: str) -> None:
         """
@@ -334,12 +344,16 @@ class EditedFileContext:
 
         :param content: the updated content of the file
         """
-        assert self._edited_file is not None
-        self._edited_file.set_contents(content)
+        self._updated_content = content
 
     def __exit__(self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None) -> None:
-        assert self._edited_file_context is not None
-        self._edited_file_context.__exit__(exc_type, exc_value, traceback)
+        if self._updated_content is not None and exc_type is None:
+            assert self._project is not None
+            with open(self._abs_path, "w", encoding=self._project.project_config.encoding) as f:
+                f.write(self._updated_content)
+            log.info(f"Updated content written to {self._abs_path}")
+            # Language servers should automatically detect the change and update its state accordingly.
+            # If they do not, we may have to add a call to notify it.
 
 
 @dataclass(kw_only=True)
