@@ -6,31 +6,31 @@ import multiprocessing
 import os
 import platform
 import sys
+import threading
 import webbrowser
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from logging import Logger
-from typing import TYPE_CHECKING, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
 from interprompt.jinja_template import JinjaTemplate
 from sensai.util import logging
 from sensai.util.logging import LogTime
 from serena import serena_version
 from serena.analytics import RegisteredTokenCountEstimator, ToolUsageStats
-from serena.config.context_mode import SerenaAgentContext, SerenaAgentMode
-from serena.config.serena_config import LanguageBackend, SerenaConfig, ToolInclusionDefinition
+from serena.config.context_mode import RegisteredContext, SerenaAgentContext, SerenaAgentMode
+from serena.config.serena_config import SerenaConfig, ToolInclusionDefinition, ToolSet
 from serena.dashboard import SerenaDashboardAPI
-from serena.ls_manager import LanguageServerManager
 from serena.project import Project
 from serena.prompt_factory import SerenaPromptFactory
-from serena.task_executor import TaskExecutor
-from serena.tools import ActivateProjectTool, GetCurrentConfigTool, ReplaceContentTool, Tool, ToolMarker, ToolRegistry
-from serena.util.gui import system_has_usable_display
+from serena.tools import ActivateProjectTool, GetCurrentConfigTool, Tool, ToolMarker, ToolRegistry
 from serena.util.inspection import iter_subclasses
 from serena.util.logging import MemoryLogHandler
-from solidlsp.ls_config import Language
+from solidlsp import SolidLanguageServer
 
 if TYPE_CHECKING:
     from serena.gui_log_viewer import GuiLogViewer
+    from serena.lsp_manager import LSPManager  # FIX #5: Proper forward reference
 
 log = logging.getLogger(__name__)
 TTool = TypeVar("TTool", bound="Tool")
@@ -43,10 +43,6 @@ class ProjectNotFoundError(Exception):
 
 
 class AvailableTools:
-    """
-    Represents the set of available/exposed tools of a SerenaAgent.
-    """
-
     def __init__(self, tools: list[Tool]):
         """
         :param tools: the list of available tools
@@ -61,94 +57,6 @@ class AvailableTools:
 
     def __len__(self) -> int:
         return len(self.tools)
-
-
-class ToolSet:
-    """
-    Represents a set of tools by their names.
-    """
-
-    LEGACY_TOOL_NAME_MAPPING = {"replace_regex": ReplaceContentTool.get_name_from_cls()}
-    """
-    maps legacy tool names to their new names for backward compatibility
-    """
-
-    def __init__(self, tool_names: set[str]) -> None:
-        self._tool_names = tool_names
-
-    @classmethod
-    def default(cls) -> "ToolSet":
-        """
-        :return: the default tool set, which contains all tools that are enabled by default
-        """
-        from serena.tools import ToolRegistry
-
-        return cls(set(ToolRegistry().get_tool_names_default_enabled()))
-
-    def apply(self, *tool_inclusion_definitions: "ToolInclusionDefinition") -> "ToolSet":
-        """
-        Applies one or more tool inclusion definitions to this tool set,
-        resulting in a new tool set.
-
-        :param tool_inclusion_definitions: the definitions to apply
-        :return: a new tool set with the definitions applied
-        """
-        from serena.tools import ToolRegistry
-
-        def get_updated_tool_name(tool_name: str) -> str:
-            """Retrieves the updated tool name if the provided tool name is deprecated, logging a warning."""
-            if tool_name in self.LEGACY_TOOL_NAME_MAPPING:
-                new_tool_name = self.LEGACY_TOOL_NAME_MAPPING[tool_name]
-                log.warning("Tool name '%s' is deprecated, please use '%s' instead", tool_name, new_tool_name)
-                return new_tool_name
-            return tool_name
-
-        registry = ToolRegistry()
-        tool_names = set(self._tool_names)
-        for definition in tool_inclusion_definitions:
-            included_tools = []
-            excluded_tools = []
-            for included_tool in definition.included_optional_tools:
-                included_tool = get_updated_tool_name(included_tool)
-                if not registry.is_valid_tool_name(included_tool):
-                    raise ValueError(f"Invalid tool name '{included_tool}' provided for inclusion")
-                if included_tool not in tool_names:
-                    tool_names.add(included_tool)
-                    included_tools.append(included_tool)
-            for excluded_tool in definition.excluded_tools:
-                excluded_tool = get_updated_tool_name(excluded_tool)
-                if not registry.is_valid_tool_name(excluded_tool):
-                    raise ValueError(f"Invalid tool name '{excluded_tool}' provided for exclusion")
-                if excluded_tool in tool_names:
-                    tool_names.remove(excluded_tool)
-                    excluded_tools.append(excluded_tool)
-            if included_tools:
-                log.info(f"{definition} included {len(included_tools)} tools: {', '.join(included_tools)}")
-            if excluded_tools:
-                log.info(f"{definition} excluded {len(excluded_tools)} tools: {', '.join(excluded_tools)}")
-        return ToolSet(tool_names)
-
-    def without_editing_tools(self) -> "ToolSet":
-        """
-        :return: a new tool set that excludes all tools that can edit
-        """
-        from serena.tools import ToolRegistry
-
-        registry = ToolRegistry()
-        tool_names = set(self._tool_names)
-        for tool_name in self._tool_names:
-            if registry.get_tool_class_by_name(tool_name).can_edit():
-                tool_names.remove(tool_name)
-        return ToolSet(tool_names)
-
-    def get_tool_names(self) -> set[str]:
-        """
-        Returns the names of the tools that are currently included in the tool set.
-        """
-        return self._tool_names
-
-    def includes_name(self, tool_name: str) -> bool:
-        return tool_name in self._tool_names
 
 
 class SerenaAgent:
@@ -178,13 +86,11 @@ class SerenaAgent:
 
         # project-specific instances, which will be initialized upon project activation
         self._active_project: Project | None = None
-<<<<<<< HEAD
-=======
+        # FIX #5: Use proper TYPE_CHECKING import instead of string literal
         self.lsp_manager: "LSPManager | None" = None  # NEW: Polyglot support
         self._language_server: SolidLanguageServer | None = None  # DEPRECATED: Use lsp_manager
         self.memories_manager: MemoriesManager | None = None
         self.lines_read: LinesRead | None = None
->>>>>>> 5788dab (feat(agent): Add LSPManager integration to SerenaAgent class)
 
         # adjust log level
         serena_log_level = self.serena_config.log_level
@@ -202,7 +108,6 @@ class SerenaAgent:
         # open GUI log window if enabled
         self._gui_log_viewer: Optional["GuiLogViewer"] = None
         if self.serena_config.gui_log_window_enabled:
-            log.info("Opening GUI window")
             if platform.system() == "Darwin":
                 log.warning("GUI log window is not supported on macOS")
             else:
@@ -212,8 +117,6 @@ class SerenaAgent:
 
                 self._gui_log_viewer = GuiLogViewer("dashboard", title="Serena Logs", memory_log_handler=get_memory_log_handler())
                 self._gui_log_viewer.start()
-        else:
-            log.debug("GUI window is disabled")
 
         # set the agent context
         if context is None:
@@ -233,10 +136,7 @@ class SerenaAgent:
         self._tool_usage_stats = ToolUsageStats(token_count_estimator)
 
         # log fundamental information
-        log.info(
-            f"Starting Serena server (version={serena_version()}, process id={os.getpid()}, parent process id={os.getppid()}; "
-            f"language backend={self.serena_config.language_backend.name})"
-        )
+        log.info(f"Starting Serena server (version={serena_version()}, process id={os.getpid()}, parent process id={os.getppid()})")
         log.info("Configuration file: %s", self.serena_config.config_file_path)
         log.info("Available projects: {}".format(", ".join(self.serena_config.project_names)))
         log.info(f"Loaded tools ({len(self._all_tools)}): {', '.join([tool.get_name_from_cls() for tool in self._all_tools.values()])}")
@@ -246,9 +146,9 @@ class SerenaAgent:
         # determine the base toolset defining the set of exposed tools (which e.g. the MCP shall see),
         # limited by the Serena config, the context (which is fixed for the session) and JetBrains mode
         tool_inclusion_definitions: list[ToolInclusionDefinition] = [self.serena_config, self._context]
-        if self._context.single_project:
-            tool_inclusion_definitions.extend(self._single_project_context_tool_inclusion_definitions(project))
-        if self.serena_config.language_backend == LanguageBackend.JETBRAINS:
+        if self._context.name == RegisteredContext.IDE_ASSISTANT.value:
+            tool_inclusion_definitions.extend(self._ide_assistant_context_tool_inclusion_definitions(project))
+        if self.serena_config.jetbrains:
             tool_inclusion_definitions.append(SerenaAgentMode.from_name_internal("jetbrains"))
 
         self._base_tool_set = ToolSet.default().apply(*tool_inclusion_definitions)
@@ -256,8 +156,10 @@ class SerenaAgent:
         log.info(f"Number of exposed tools: {len(self._exposed_tools)}")
 
         # create executor for starting the language server and running tools in another thread
-        # This executor is used to achieve linear task execution
-        self._task_executor = TaskExecutor("SerenaAgentTaskExecutor")
+        # This executor is used to achieve linear task execution, so it is important to use a single-threaded executor.
+        self._task_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="SerenaAgentExecutor")
+        self._task_executor_lock = threading.Lock()
+        self._task_executor_task_index = 1
 
         # Initialize the prompt factory
         self.prompt_factory = SerenaPromptFactory()
@@ -284,56 +186,15 @@ class SerenaAgent:
         if self.serena_config.web_dashboard:
             self._dashboard_thread, port = SerenaDashboardAPI(
                 get_memory_log_handler(), tool_names, agent=self, tool_usage_stats=self._tool_usage_stats
-            ).run_in_thread(host=self.serena_config.web_dashboard_listen_address)
-            dashboard_host = self.serena_config.web_dashboard_listen_address
-            if dashboard_host == "0.0.0.0":
-                dashboard_host = "localhost"
-            dashboard_url = f"http://{dashboard_host}:{port}/dashboard/index.html"
+            ).run_in_thread()
+            dashboard_url = f"http://127.0.0.1:{port}/dashboard/index.html"
             log.info("Serena web dashboard started at %s", dashboard_url)
             if self.serena_config.web_dashboard_open_on_launch:
-                if not system_has_usable_display():
-                    log.warning("Not opening the Serena web dashboard automatically because no usable display was detected.")
-                else:
-                    # open the dashboard URL in the default web browser (using a separate process to control
-                    # output redirection)
-                    process = multiprocessing.Process(target=self._open_dashboard, args=(dashboard_url,))
-                    process.start()
-                    process.join(timeout=1)
-            # inform the GUI window (if any)
-            if self._gui_log_viewer is not None:
-                self._gui_log_viewer.set_dashboard_url(dashboard_url)
-
-    def get_current_tasks(self) -> list[TaskExecutor.TaskInfo]:
-        """
-        Gets the list of tasks currently running or queued for execution.
-        The function returns a list of thread-safe TaskInfo objects (specifically created for the caller).
-
-        :return: the list of tasks in the execution order (running task first)
-        """
-        return self._task_executor.get_current_tasks()
-
-    def get_last_executed_task(self) -> TaskExecutor.TaskInfo | None:
-        """
-        Gets the last executed task.
-
-        :return: the last executed task info or None if no task has been executed yet
-        """
-        return self._task_executor.get_last_executed_task()
-
-    def get_language_server_manager(self) -> LanguageServerManager | None:
-        if self._active_project is not None:
-            return self._active_project.language_server_manager
-        return None
-
-    def get_language_server_manager_or_raise(self) -> LanguageServerManager:
-        language_server_manager = self.get_language_server_manager()
-        if language_server_manager is None:
-            raise Exception(
-                "The language server manager is not initialized, indicating a problem during project activation. "
-                "Inform the user, telling them to inspect Serena's logs in order to determine the issue. "
-                "IMPORTANT: Wait for further instructions before you continue!"
-            )
-        return language_server_manager
+                # open the dashboard URL in the default web browser (using a separate process to control
+                # output redirection)
+                process = multiprocessing.Process(target=self._open_dashboard, args=(dashboard_url,))
+                process.start()
+                process.join(timeout=1)
 
     def get_context(self) -> SerenaAgentContext:
         return self._context
@@ -351,7 +212,7 @@ class SerenaAgent:
                 os.environ["COMSPEC"] = ""  # force use of default shell
                 log.info("Adjusting COMSPEC environment variable to use the default shell instead of '%s'", comspec)
 
-    def _single_project_context_tool_inclusion_definitions(self, project_root_or_name: str | None) -> list[ToolInclusionDefinition]:
+    def _ide_assistant_context_tool_inclusion_definitions(self, project_root_or_name: str | None) -> list[ToolInclusionDefinition]:
         """
         In the IDE assistant context, the agent is assumed to work on a single project, and we thus
         want to apply that project's tool exclusions/inclusions from the get-go, limiting the set
@@ -369,9 +230,6 @@ class SerenaAgent:
             #   and provide responses to the client immediately.
             project = self.load_project_from_path_or_name(project_root_or_name, autogenerate=False)
             if project is not None:
-                log.info(
-                    "Applying tool inclusion/exclusion definitions for single-project context based on project '%s'", project.project_name
-                )
                 tool_inclusion_definitions.append(
                     ToolInclusionDefinition(
                         excluded_tools=[ActivateProjectTool.get_name_from_cls(), GetCurrentConfigTool.get_name_from_cls()]
@@ -495,53 +353,57 @@ class SerenaAgent:
 
         log.info(f"Active tools ({len(self._active_tools)}): {', '.join(self.get_active_tool_names())}")
 
-    def issue_task(
-        self, task: Callable[[], T], name: str | None = None, logged: bool = True, timeout: float | None = None
-    ) -> TaskExecutor.Task[T]:
+    def issue_task(self, task: Callable[[], Any], name: str | None = None) -> Future:
         """
         Issue a task to the executor for asynchronous execution.
         It is ensured that tasks are executed in the order they are issued, one after another.
 
         :param task: the task to execute
         :param name: the name of the task for logging purposes; if None, use the task function's name
-        :param logged: whether to log management of the task; if False, only errors will be logged
-        :param timeout: the maximum time to wait for task completion in seconds, or None to wait indefinitely
-        :return: the task object, through which the task's future result can be accessed
+        :return: a Future object representing the execution of the task
         """
-        return self._task_executor.issue_task(task, name=name, logged=logged, timeout=timeout)
+        with self._task_executor_lock:
+            task_name = f"Task-{self._task_executor_task_index}[{name or task.__name__}]"
+            self._task_executor_task_index += 1
 
-    def execute_task(self, task: Callable[[], T], name: str | None = None, logged: bool = True, timeout: float | None = None) -> T:
+            def task_execution_wrapper() -> Any:
+                with LogTime(task_name, logger=log):
+                    return task()
+
+            log.info(f"Scheduling {task_name}")
+            return self._task_executor.submit(task_execution_wrapper)
+
+    def execute_task(self, task: Callable[[], T]) -> T:
         """
         Executes the given task synchronously via the agent's task executor.
         This is useful for tasks that need to be executed immediately and whose results are needed right away.
 
         :param task: the task to execute
-        :param name: the name of the task for logging purposes; if None, use the task function's name
-        :param logged: whether to log management of the task; if False, only errors will be logged
-        :param timeout: the maximum time to wait for task completion in seconds, or None to wait indefinitely
         :return: the result of the task execution
         """
-        return self._task_executor.execute_task(task, name=name, logged=logged, timeout=timeout)
+        future = self.issue_task(task)
+        return future.result()
 
     def is_using_language_server(self) -> bool:
         """
         :return: whether this agent uses language server-based code analysis
         """
-        return self.serena_config.language_backend == LanguageBackend.LSP
+        return not self.serena_config.jetbrains
 
     def _activate_project(self, project: Project) -> None:
         log.info(f"Activating {project.project_name} at {project.project_root}")
         self._active_project = project
         self._update_active_tools()
 
-        def init_language_server_manager() -> None:
+        def init_language_server() -> None:
             # start the language server
             with LogTime("Language server initialization", logger=log):
-                self.reset_language_server_manager()
+                self.reset_language_server()
+                assert self.language_server is not None
 
         # initialize the language server in the background (if in language server mode)
         if self.is_using_language_server():
-            self.issue_task(init_language_server_manager)
+            self.issue_task(init_language_server)
 
         if self._project_activation_callback is not None:
             self._project_activation_callback()
@@ -648,68 +510,115 @@ class SerenaAgent:
 
         return result_str
 
-<<<<<<< HEAD
-    def reset_language_server_manager(self) -> None:
-        """
-        Starts/resets the language server manager for the current project
-=======
     @property
     def language_server(self) -> SolidLanguageServer | None:
         """
         Backward compatibility property: returns first working LSP from manager.
         DEPRECATED: Use lsp_manager for polyglot support.
+
+        FIX #3 (WARNING): Caches manager reference to prevent race condition.
         """
-        if self.lsp_manager is not None:
-            working_lsps = self.lsp_manager.get_all_working_language_servers()
+        # FIX #3: Cache manager reference to prevent race condition
+        manager = self.lsp_manager
+        if manager is not None:
+            working_lsps = manager.get_all_working_language_servers()
             if working_lsps:
                 return working_lsps[0]
         return self._language_server
 
     def is_language_server_running(self) -> bool:
         """Check if any language server is running (checks LSPManager if available)."""
-        if self.lsp_manager is not None:
-            working_lsps = self.lsp_manager.get_all_working_language_servers()
+        # FIX #3: Cache lsp_manager reference to prevent race condition
+        manager = self.lsp_manager
+        if manager is not None:
+            working_lsps = manager.get_all_working_language_servers()
             return len(working_lsps) > 0
         return self._language_server is not None and self._language_server.is_running()
+
+    def _calculate_ls_timeout(self) -> float | None:
+        """
+        Calculate language server timeout from tool timeout.
+
+        FIX #4 (WARNING): Extracted shared timeout calculation logic to eliminate DRY violation.
+
+        Returns:
+            Timeout in seconds (tool_timeout - 5), or None if no timeout configured
+
+        Raises:
+            ValueError: If tool timeout is less than 10 seconds
+        """
+        tool_timeout = self.serena_config.tool_timeout
+        if tool_timeout is None or tool_timeout < 0:
+            return None
+
+        if tool_timeout < 10:
+            raise ValueError(f"Tool timeout must be at least 10 seconds, but is {tool_timeout} seconds")
+
+        # LSP timeout should be smaller than tool timeout to allow for overhead
+        return tool_timeout - 5
 
     def reset_lsp_manager(self) -> None:
         """
         Starts/resets the LSPManager for the current project (polyglot support).
->>>>>>> 5788dab (feat(agent): Add LSPManager integration to SerenaAgent class)
+
+        FIX #1 (CRITICAL): Uses synchronous shutdown wrapper for proper resource cleanup.
+        FIX #2 (ERROR): Adds comprehensive error handling with validation and rollback.
+        FIX #3 (WARNING): Caches manager reference to prevent race conditions.
+        FIX #4 (WARNING): Uses extracted _calculate_ls_timeout() method.
         """
         from serena.lsp_manager import LSPManager
 
-        tool_timeout = self.serena_config.tool_timeout
-        if tool_timeout is None or tool_timeout < 0:
-            ls_timeout = None
-        else:
-            if tool_timeout < 10:
-                raise ValueError(f"Tool timeout must be at least 10 seconds, but is {tool_timeout} seconds")
-            ls_timeout = tool_timeout - 5
+        # FIX #4: Use extracted timeout calculation method
+        ls_timeout = self._calculate_ls_timeout()
 
-        # Stop existing LSPManager if running
-        if self.lsp_manager is not None:
+        # FIX #1 & #3: Properly shutdown existing LSPManager with cached reference
+        old_manager = self.lsp_manager
+        if old_manager is not None:
             log.info("Stopping existing LSPManager...")
-            # Note: LSPManager shutdown is async, but we're in sync context
-            # For now, just set to None (proper async shutdown would require refactoring)
-            self.lsp_manager = None
+            try:
+                # FIX #1: Use synchronous shutdown wrapper instead of just setting to None
+                old_manager.shutdown_all_sync()
+                log.info("Existing LSPManager stopped successfully")
+            except Exception as e:
+                log.error(f"Error shutting down existing LSPManager: {e}", exc_info=True)
+                # Continue anyway - we'll create a new manager
+            finally:
+                self.lsp_manager = None
 
-        # Create new LSPManager
+        # FIX #2: Add comprehensive error handling for LSPManager creation
         assert self._active_project is not None
-        self.lsp_manager = self._active_project.create_lsp_manager(
-            log_level=self.serena_config.log_level,
-            ls_timeout=ls_timeout,
-            trace_lsp_communication=self.serena_config.trace_lsp_communication,
-            ls_specific_settings=self.serena_config.ls_specific_settings,
-        )
-        log.info(
-            f"Created LSPManager for {len(self._active_project.languages)} languages: {[lang.value for lang in self._active_project.languages]}"
-        )
+        try:
+            new_manager = self._active_project.create_lsp_manager(
+                log_level=self.serena_config.log_level,
+                ls_timeout=ls_timeout,
+                trace_lsp_communication=self.serena_config.trace_lsp_communication,
+                ls_specific_settings=self.serena_config.ls_specific_settings,
+            )
+
+            # FIX #2: Validate that LSPManager was created successfully
+            if new_manager is None:
+                raise RuntimeError("create_lsp_manager() returned None")
+
+            self.lsp_manager = new_manager
+            log.info(
+                f"Created LSPManager for {len(self._active_project.languages)} languages: "
+                f"{[lang.value for lang in self._active_project.languages]}"
+            )
+
+        except Exception as e:
+            # FIX #2: Rollback on failure - restore old manager if possible
+            log.error(f"Failed to create LSPManager: {e}", exc_info=True)
+            if old_manager is not None:
+                log.warning("Attempting to restore previous LSPManager...")
+                self.lsp_manager = old_manager
+            raise RuntimeError(f"Failed to create LSPManager for {self._active_project.project_name}: {e}") from e
 
     def reset_language_server(self) -> None:
         """
         Starts/resets the language server for the current project.
         DEPRECATED: Use reset_lsp_manager() for polyglot support.
+
+        FIX #4 (WARNING): Uses extracted _calculate_ls_timeout() method.
         """
         # Delegate to new method for polyglot projects
         if self._active_project and len(self._active_project.languages) > 1:
@@ -717,19 +626,9 @@ class SerenaAgent:
             self.reset_lsp_manager()
             return
 
-        # Legacy single-language path
-        tool_timeout = self.serena_config.tool_timeout
-        if tool_timeout is None or tool_timeout < 0:
-            ls_timeout = None
-        else:
-            if tool_timeout < 10:
-                raise ValueError(f"Tool timeout must be at least 10 seconds, but is {tool_timeout} seconds")
-            ls_timeout = tool_timeout - 5
+        # FIX #4: Use extracted timeout calculation method
+        ls_timeout = self._calculate_ls_timeout()
 
-<<<<<<< HEAD
-        # instantiate and start the necessary language servers
-        self.get_active_project_or_raise().create_language_server_manager(
-=======
         # stop the language server if it is running
         if self._language_server is not None and self._language_server.is_running():
             log.info(f"Stopping the current language server at {self._language_server.repository_root_path} ...")
@@ -739,48 +638,29 @@ class SerenaAgent:
         # instantiate and start the language server
         assert self._active_project is not None
         self._language_server = self._active_project.create_language_server(
->>>>>>> 5788dab (feat(agent): Add LSPManager integration to SerenaAgent class)
             log_level=self.serena_config.log_level,
             ls_timeout=ls_timeout,
             trace_lsp_communication=self.serena_config.trace_lsp_communication,
             ls_specific_settings=self.serena_config.ls_specific_settings,
         )
-<<<<<<< HEAD
-
-    def add_language(self, language: Language) -> None:
-        """
-        Adds a new language to the active project, spawning the respective language server and updating the project configuration.
-        The addition is scheduled via the agent's task executor and executed synchronously, i.e. the method returns
-        when the addition is complete.
-
-        :param language: the language to add
-        """
-        self.execute_task(lambda: self.get_active_project_or_raise().add_language(language), name=f"AddLanguage:{language.value}")
-
-    def remove_language(self, language: Language) -> None:
-        """
-        Removes a language from the active project, shutting down the respective language server and updating the project configuration.
-        The removal is scheduled via the agent's task executor and executed asynchronously.
-
-        :param language: the language to remove
-        """
-        self.issue_task(lambda: self.get_active_project_or_raise().remove_language(language), name=f"RemoveLanguage:{language.value}")
-=======
         log.info(f"Starting the language server for {self._active_project.project_name}")
         self._language_server.start()
         if not self._language_server.is_running():
             raise RuntimeError(
                 f"Failed to start the language server for {self._active_project.project_name} at {self._active_project.project_root}"
             )
->>>>>>> 5788dab (feat(agent): Add LSPManager integration to SerenaAgent class)
 
     def get_language_server_for_file(self, file_path: str) -> SolidLanguageServer | None:
         """
         Get the appropriate language server for a given file path.
         Routes to correct LSP based on file extension when using LSPManager.
+
+        FIX #3 (WARNING): Caches manager reference to prevent race condition.
         """
-        if self.lsp_manager is not None:
-            return self.lsp_manager.get_language_server_for_file(file_path)
+        # FIX #3: Cache manager reference to prevent race condition
+        manager = self.lsp_manager
+        if manager is not None:
+            return manager.get_language_server_for_file(file_path)
         return self._language_server
 
     def get_tool(self, tool_class: type[TTool]) -> TTool:
@@ -790,22 +670,20 @@ class SerenaAgent:
         ToolRegistry().print_tool_overview(self._active_tools.values())
 
     def __del__(self) -> None:
-        self.shutdown()
-
-    def shutdown(self, timeout: float = 2.0) -> None:
         """
-        Shuts down the agent, freeing resources and stopping background tasks.
+        Destructor to clean up the language server instance and GUI logger
         """
         if not hasattr(self, "_is_initialized"):
             return
         log.info("SerenaAgent is shutting down ...")
-        if self._active_project is not None:
-            self._active_project.shutdown(timeout=timeout)
-            self._active_project = None
+        if self.is_language_server_running():
+            log.info("Stopping the language server ...")
+            assert self.language_server is not None
+            self.language_server.save_cache()
+            self.language_server.stop()
         if self._gui_log_viewer:
             log.info("Stopping the GUI log window ...")
             self._gui_log_viewer.stop()
-            self._gui_log_viewer = None
 
     def get_tool_by_name(self, tool_name: str) -> Tool:
         tool_class = ToolRegistry().get_tool_class_by_name(tool_name)
