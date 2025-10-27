@@ -2,7 +2,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pathspec
 from sensai.util.string import ToStringMixin
@@ -16,6 +16,9 @@ from serena.util.general import save_yaml
 from solidlsp import SolidLanguageServer
 from solidlsp.ls_config import Language
 from solidlsp.ls_utils import FileUtils
+
+if TYPE_CHECKING:
+    from serena.lsp_manager import LSPManager
 
 log = logging.getLogger(__name__)
 
