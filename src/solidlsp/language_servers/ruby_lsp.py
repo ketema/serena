@@ -113,8 +113,17 @@ class RubyLsp(SolidLanguageServer):
         # - System Ruby version differs from what the project expects
         # - System bundler version is incompatible with Gemfile.lock
         # - Project gems aren't installed in system Ruby
+        #
+        # Detection priority (same pattern as rust-analyzer):
+        # 1. Check rbenv shims directory directly (avoids PATH dependency in launchd/services)
+        # 2. Fallback to shutil.which for PATH-based detection
         ruby_version_file = os.path.join(repository_root_path, ".ruby-version")
-        use_rbenv = os.path.exists(ruby_version_file) and shutil.which("rbenv") is not None
+
+        # Check rbenv installation directly (preferred - works in launchd without PATH)
+        rbenv_shims = os.path.expanduser("~/.rbenv/shims")
+        rbenv_bin = os.path.expanduser("~/.rbenv/bin/rbenv")
+        rbenv_available = os.path.isdir(rbenv_shims) or os.path.isfile(rbenv_bin) or shutil.which("rbenv") is not None
+        use_rbenv = os.path.exists(ruby_version_file) and rbenv_available
 
         if use_rbenv:
             ruby_cmd = ["rbenv", "exec", "ruby"]
