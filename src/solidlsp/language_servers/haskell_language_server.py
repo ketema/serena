@@ -28,13 +28,22 @@ class HaskellLanguageServer(SolidLanguageServer):
 
     @staticmethod
     def _ensure_hls_installed() -> str:
-        """Ensure haskell-language-server-wrapper is available."""
-        # Try common locations
+        """Ensure haskell-language-server-wrapper is available.
+
+        Detection priority (same pattern as rust-analyzer):
+        1. GHCup (preferred - avoids picking up incompatible versions from PATH)
+        2. Common installation locations (Homebrew, Cabal, Stack)
+        3. System PATH (last resort - can pick up incompatible versions)
+        """
+        # Priority 1: Check GHCup FIRST (preferred)
+        ghcup_path = os.path.expanduser("~/.ghcup/bin/haskell-language-server-wrapper")
+        if os.path.isfile(ghcup_path) and os.access(ghcup_path, os.X_OK):
+            return ghcup_path
+
+        # Priority 2: Common installation locations
         common_paths = [
-            shutil.which("haskell-language-server-wrapper"),
             "/opt/homebrew/bin/haskell-language-server-wrapper",
             "/usr/local/bin/haskell-language-server-wrapper",
-            os.path.expanduser("~/.ghcup/bin/haskell-language-server-wrapper"),
             os.path.expanduser("~/.cabal/bin/haskell-language-server-wrapper"),
             os.path.expanduser("~/.local/bin/haskell-language-server-wrapper"),
         ]
@@ -61,6 +70,15 @@ class HaskellLanguageServer(SolidLanguageServer):
         for path in common_paths:
             if path and os.path.isfile(path) and os.access(path, os.X_OK):
                 return path
+
+        # Priority 3: System PATH (last resort - can pick up incompatible versions)
+        path_result = shutil.which("haskell-language-server-wrapper")
+        if path_result:
+            log.warning(
+                f"Found haskell-language-server-wrapper via PATH at: {path_result}. "
+                "Consider installing via GHCup for better version management: https://www.haskell.org/ghcup/"
+            )
+            return path_result
 
         raise RuntimeError(
             "haskell-language-server-wrapper is not installed or not in PATH.\n"
