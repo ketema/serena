@@ -270,9 +270,6 @@ class Tool(Component):
                             "Error: No active project. Ask the user to provide the project path or to select a project from this list of known projects: "
                             + f"{self.agent.serena_config.project_names}"
                         )
-                    if self.agent.is_using_language_server() and not self.agent.is_language_server_running():
-                        log.info("Language server is not running. Starting it ...")
-                        self.agent.reset_language_server()
 
                 # apply the actual tool
                 try:
