@@ -107,7 +107,10 @@ class TestLSPTimeoutManagerInitialization:
 
         # Read implementation source to verify import
         import inspect
-        source = inspect.getsource(LSPTimeoutManager.__module__)
+        import sys
+
+        module = sys.modules[LSPTimeoutManager.__module__]
+        source = inspect.getsource(module)
 
         has_contract_import = "from contracts.lsp_timeout_contract import" in source and "DEFAULT_TIMEOUTS_SECONDS" in source
 
@@ -188,8 +191,8 @@ class TestLSPTimeoutManagerInitialization:
 
         custom_config = {
             "python": 7200,  # 2 hours (custom)
-            "rust": 900,     # 15 min (custom)
-            "default": 1800, # 30 min (custom default)
+            "rust": 900,  # 15 min (custom)
+            "default": 1800,  # 30 min (custom default)
         }
 
         timeout_manager = LSPTimeoutManager(timeout_config=custom_config)
@@ -364,9 +367,10 @@ class TestLSPTimeoutManagerTouch:
         """
         from serena.lsp_timeout import LSPTimeoutManager
 
-        timeout_manager = LSPTimeoutManager()
+        # Expected time based on @freeze_time decorator - noqa: DTZ001 (freezegun uses naive)
+        frozen_time = datetime(2026, 1, 11, 12, 0, 0)  # noqa: DTZ001
 
-        frozen_time = datetime(2026, 1, 11, 12, 0, 0)
+        timeout_manager = LSPTimeoutManager()
         timeout_manager.touch("python")
 
         # Need way to verify timestamp - implementation should provide getter
@@ -431,6 +435,7 @@ class TestLSPTimeoutManagerTouch:
 
         # Small delay to ensure different timestamps
         import time
+
         time.sleep(0.01)
 
         timeout_manager.touch("rust")
@@ -636,13 +641,14 @@ class TestLSPTimeoutManagerReclaim:
         from serena.lsp_timeout import LSPTimeoutManager
 
         # Use frozen time for determinism
-        with freeze_time("2026-01-11 12:00:00") as frozen_time:
+        with freeze_time("2026-01-11 12:00:00"):
             # Create manager with custom timeout
             custom_timeout = {"test_lang": timeout_seconds, "default": timeout_seconds}
             timeout_manager = LSPTimeoutManager(timeout_config=custom_timeout)
 
             # Set last_used to specific time in the past (deterministic)
-            past_time = datetime(2026, 1, 11, 12, 0, 0) - timedelta(seconds=idle_seconds)
+
+            past_time = datetime(2026, 1, 11, 12, 0, 0) - timedelta(seconds=idle_seconds)  # noqa: DTZ001
             timeout_manager.touch("test_lang")
 
             # Manually override timestamp to simulate idle time (need setter or mock)
@@ -717,7 +723,7 @@ class TestLSPTimeoutManagerReclaim:
         reclaim_callback = Mock()
         timeout_manager.set_reclaim_callback(reclaim_callback)
 
-        reclaimed = await timeout_manager.check_and_reclaim()
+        await timeout_manager.check_and_reclaim()
 
         assert reclaim_callback.called, (
             f"❌ INTEGRATION ERROR: Reclaim callback not called\n"
@@ -867,7 +873,7 @@ class TestLSPTimeoutManagerIntegration:
             )
 
         # Mock check_and_reclaim to count calls
-        original_check = timeout_manager.check_and_reclaim
+        _original_check = timeout_manager.check_and_reclaim
         call_count = 0
 
         async def mock_check():

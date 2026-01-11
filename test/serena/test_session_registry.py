@@ -67,9 +67,7 @@ class TestSimultaneousMultiProjectSessions:
     """REQ-1: Two MCP clients connect simultaneously to different projects without interference."""
 
     @pytest.mark.asyncio
-    async def test_bind_two_sessions_different_workspaces(
-        self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path
-    ):
+    async def test_bind_two_sessions_different_workspaces(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
         """
         WHAT: Bind two sessions to different workspaces simultaneously
         WHY: REQ-1 requires sessions to not interfere with each other
@@ -79,14 +77,10 @@ class TestSimultaneousMultiProjectSessions:
                   Implementation free to choose storage: dict, list, or other thread-safe structure.
         """
         # Bind session A to workspace A
-        ctx_a = await session_registry.bind_session(
-            session_id="session-a", workspace_root=temp_workspace_a, source="explicit"
-        )
+        await session_registry.bind_session(session_id="session-a", workspace_root=temp_workspace_a, source="explicit")
 
         # Bind session B to workspace B
-        ctx_b = await session_registry.bind_session(
-            session_id="session-b", workspace_root=temp_workspace_b, source="explicit"
-        )
+        await session_registry.bind_session(session_id="session-b", workspace_root=temp_workspace_b, source="explicit")
 
         # Verify both sessions exist
         retrieved_a = session_registry.get_session("session-a")
@@ -150,9 +144,7 @@ class TestSimultaneousMultiProjectSessions:
         )
 
     @pytest.mark.asyncio
-    async def test_concurrent_bind_operations(
-        self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path
-    ):
+    async def test_concurrent_bind_operations(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
         """
         WHAT: Bind two sessions concurrently (race condition test)
         WHY: REQ-4 requires thread-safe bind/unbind operations
@@ -203,9 +195,7 @@ class TestSessionFileAccessIsolation:
     """REQ-2: Session A cannot access files in Session B's project."""
 
     @pytest.mark.asyncio
-    async def test_session_workspace_boundary_enforcement(
-        self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path
-    ):
+    async def test_session_workspace_boundary_enforcement(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
         """
         WHAT: Verify sessions have correct workspace_root boundaries
         WHY: REQ-2 requires file access isolation between sessions
@@ -584,9 +574,7 @@ class TestCleanupOnLastSession:
         )
 
     @pytest.mark.asyncio
-    async def test_no_cleanup_when_other_sessions_remain(
-        self, session_registry: Any, temp_workspace_a: Path
-    ):
+    async def test_no_cleanup_when_other_sessions_remain(self, session_registry: Any, temp_workspace_a: Path):
         """
         WHAT: Unbind one session when other sessions for workspace remain
         WHY: REQ-5 requires cleanup ONLY on last session unbind
@@ -640,9 +628,7 @@ class TestCleanupOnLastSession:
         )
 
     @pytest.mark.asyncio
-    async def test_cleanup_multiple_workspaces_independent(
-        self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path
-    ):
+    async def test_cleanup_multiple_workspaces_independent(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
         """
         WHAT: Unbind last session for workspace A, verify workspace B unaffected
         WHY: REQ-5 cleanup must be workspace-specific (not global)
