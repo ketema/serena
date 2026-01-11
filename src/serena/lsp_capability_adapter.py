@@ -474,3 +474,33 @@ class LSPAdapterRegistry:
         POST: Overwrites any existing adapter for language
         """
         self._adapters[language] = adapter
+
+    def is_multi_root(self, language: Language) -> bool:
+        """
+        Check if language's LSP supports multi-root workspaces.
+
+        PRE: language is valid Language enum
+        POST: Returns True if LSP supports workspace/didChangeWorkspaceFolders
+        POST: Returns False if LSP is single-root only
+        """
+        adapter = self.get_adapter(language)
+        return adapter.multi_root_support == MultiRootSupport.FULL
+
+    def get_pool_key(
+        self,
+        language: Language,
+        workspace_root: Path,
+    ) -> "Language | tuple[Language, Path]":
+        """
+        Get the appropriate pool key for this language/root.
+
+        PRE: language is valid Language enum
+        PRE: workspace_root is absolute path
+
+        POST: For multi-root LSPs: returns language
+        POST: For single-root LSPs: returns (language, workspace_root)
+        """
+        if self.is_multi_root(language):
+            return language
+        else:
+            return (language, workspace_root)
