@@ -16,10 +16,11 @@ import asyncio
 import logging
 from typing import Optional
 
+from solidlsp.ls_logger import LanguageServerLogger
+
 from serena.config.serena_config import DEFAULT_TOOL_TIMEOUT, ProjectConfig
 from solidlsp import SolidLanguageServer
 from solidlsp.ls_config import Language, LanguageServerConfig
-from solidlsp.ls_logger import LanguageServerLogger
 from solidlsp.settings import SolidLSPSettings
 
 log = logging.getLogger(__name__)

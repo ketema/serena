@@ -24,11 +24,11 @@ import sys
 from pathlib import Path
 
 import pytest
+from solidlsp.ls_logger import LanguageServerLogger
 
 from serena.config.serena_config import ProjectConfig
 from serena.lsp_manager import LSPManager
 from solidlsp.ls_config import Language
-from solidlsp.ls_logger import LanguageServerLogger
 from solidlsp.settings import SolidLSPSettings
 
 

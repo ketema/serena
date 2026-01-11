@@ -12,11 +12,11 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import pytest
+from solidlsp.ls_logger import LanguageServerLogger
 
 from serena.config.serena_config import ProjectConfig
 from serena.lsp_manager import LSPManager
 from solidlsp.ls_config import Language
-from solidlsp.ls_logger import LanguageServerLogger
 from solidlsp.settings import SolidLSPSettings
 
 

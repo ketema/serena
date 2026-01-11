@@ -73,6 +73,7 @@ dev = [
   "nbsphinx",
   "pyinstrument",
   "pytest-timeout>=2.4.0",
+  "freezegun>=1.5.0",
 ]
 agno = ["agno>=2.2.1", "sqlalchemy>=2.0.40"]
 google = ["google-genai>=1.8.0"]

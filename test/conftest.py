@@ -1,10 +1,15 @@
 import logging
 import os
+import sys
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
+# Add contracts directory to Python path for test imports
+_repo_root = Path(__file__).parent.parent
+sys.path.insert(0, str(_repo_root))
+
 import pytest
-from blib2to3.pgen2.parse import contextmanager
 from sensai.util.logging import configure
 
 from serena.config.serena_config import SerenaPaths

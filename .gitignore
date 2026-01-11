@@ -218,6 +218,10 @@ tmp/
 # Claude settings
 .claude/settings.local.json
 
+# Docker local overrides (not for upstream)
+compose.override.yaml
+compose.override.yml
+
 # Elixir
 /test/resources/repos/elixir/test_repo/deps
 # Exception: Don't ignore Elixir test repository lib directory (contains source code)
