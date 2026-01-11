@@ -7,10 +7,17 @@ Implements MCPSessionBridgeContract with:
 - Anonymous sessions: On-demand creation with TTL tracking
 - Thread pool safety: copy_context() propagation
 - TTL reaper: Async cleanup of expired anonymous sessions
+
+THREAD SAFETY:
+- SessionRegistry: Thread-safe via internal locks
+- ContextVar: Thread-safe per execution context
+- _anonymous_sessions: Protected by _anonymous_lock (threading.Lock)
+  Accessed from: async reaper (event loop) + sync tool dispatch (thread pool)
 """
 
 import asyncio
 import logging
+import threading
 from collections.abc import Callable
 from contextvars import ContextVar, Token, copy_context
 from datetime import datetime, timedelta
@@ -37,9 +44,10 @@ class MCPSessionBridge(MCPSessionBridgeContract):
     Bridges MCP transport sessions to SessionRegistry.
 
     THREAD SAFETY:
-    - SessionRegistry operations are thread-safe
-    - ContextVar operations are thread-safe (per execution context)
-    - Anonymous session tracking protected by asyncio (single-threaded event loop)
+    - SessionRegistry: Thread-safe via internal locks
+    - ContextVar: Thread-safe per execution context
+    - _anonymous_sessions: Protected by _anonymous_lock (threading.Lock)
+      Accessed from: async reaper (event loop) + sync tool dispatch (thread pool)
     """
 
     def __init__(self, session_registry: SessionRegistry) -> None:
@@ -47,6 +55,9 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         self._session_registry = session_registry
         # Track anonymous session creation times for TTL
         self._anonymous_sessions: dict[str, datetime] = {}
+        # Lock for thread-safe access to _anonymous_sessions
+        # Accessed from: async reaper (event loop) + sync tool dispatch (thread pool)
+        self._anonymous_lock = threading.Lock()
         # Reaper task
         self._reaper_task: asyncio.Task | None = None
         # Clear any leftover ContextVar state from previous instances
@@ -92,9 +103,10 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         # Unbind session (idempotent)
         self._session_registry.unbind_session(mcp_session_id)
 
-        # Remove from anonymous tracking if present
-        if mcp_session_id in self._anonymous_sessions:
-            del self._anonymous_sessions[mcp_session_id]
+        # Remove from anonymous tracking if present (thread-safe)
+        with self._anonymous_lock:
+            if mcp_session_id in self._anonymous_sessions:
+                del self._anonymous_sessions[mcp_session_id]
 
         logger.info(f"MCP session closed: {mcp_session_id}")
 
@@ -150,20 +162,27 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         """
         Create an anonymous session for backward compatibility.
 
+        PRE: workspace_root should be provided for security isolation
+             (None allowed for backward compatibility but logged as warning)
         POST: Returns valid session_id with TTL tracking
         """
         # Generate anonymous session ID
         session_id = f"{ANONYMOUS_SESSION_PREFIX}{uuid4()}"
 
-        # Default workspace if none provided
+        # Default workspace if none provided (backward compat, but warn)
         if workspace_root is None:
             workspace_root = Path.cwd()
+            logger.warning(
+                f"Anonymous session {session_id} created without explicit workspace_root. "
+                "Using cwd() for backward compatibility. Consider providing explicit workspace."
+            )
 
         # Register session
         self._session_registry.bind_session(session_id, workspace_root)
 
-        # Track creation time for TTL
-        self._anonymous_sessions[session_id] = datetime.now()
+        # Track creation time for TTL (thread-safe)
+        with self._anonymous_lock:
+            self._anonymous_sessions[session_id] = datetime.now()
 
         logger.info(f"Anonymous session created: {session_id}")
 
@@ -255,12 +274,11 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         now = datetime.now()
         ttl = timedelta(seconds=ANONYMOUS_SESSION_TTL_SECONDS)
 
-        expired_sessions = [
-            session_id
-            for session_id, created_at in self._anonymous_sessions.items()
-            if now - created_at > ttl
-        ]
+        # Get expired sessions under lock (thread-safe read)
+        with self._anonymous_lock:
+            expired_sessions = [session_id for session_id, created_at in self._anonymous_sessions.items() if now - created_at > ttl]
 
+        # Close sessions outside lock (on_transport_session_closed acquires lock)
         for session_id in expired_sessions:
             logger.info(f"Reaping expired anonymous session: {session_id}")
             self.on_transport_session_closed(session_id)
