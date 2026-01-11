@@ -1,9 +1,8 @@
 """LSP idle timeout management with automatic resource reclamation."""
 
-import asyncio
-import inspect
 import logging
-from collections.abc import Awaitable, Callable
+import threading
+from collections.abc import Callable
 from datetime import datetime
 
 from contracts.lsp_timeout_contract import DEFAULT_TIMEOUTS_SECONDS
@@ -40,8 +39,9 @@ class LSPTimeoutManager:
 
         self._check_interval = check_interval
         self._last_used: dict[str, datetime] = {}
-        self._monitoring_task: asyncio.Task[None] | None = None
-        self._reclaim_callback: Callable[[str], Awaitable[None]] | None = None
+        self._monitoring_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._reclaim_callback: Callable[[str], None] | None = None
 
     def get_timeout(self, language: str) -> int:
         """
@@ -72,42 +72,40 @@ class LSPTimeoutManager:
         """
         return self._last_used.get(language)
 
-    async def start_monitoring(self) -> None:
+    def start_monitoring(self) -> None:
         """
-        Start background monitoring task.
+        Start background monitoring thread.
 
-        Creates asyncio task that periodically checks for idle LSPs.
+        Creates daemon thread that periodically checks for idle LSPs.
         Idempotent - safe to call multiple times.
         """
-        if self._monitoring_task is not None and not self._monitoring_task.done():
+        if self._monitoring_thread is not None and self._monitoring_thread.is_alive():
             return  # Already monitoring
 
-        self._monitoring_task = asyncio.create_task(self._monitor_loop())
+        self._stop_event.clear()
+        self._monitoring_thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._monitoring_thread.start()
 
-    async def stop_monitoring(self) -> None:
+    def stop_monitoring(self) -> None:
         """
-        Stop background monitoring task.
+        Stop background monitoring thread.
 
-        Cancels monitoring task. Safe to call even if not monitoring.
+        Signals stop event and waits for thread to finish.
+        Safe to call even if not monitoring.
         """
-        if self._monitoring_task is not None and not self._monitoring_task.done():
-            self._monitoring_task.cancel()
-            try:
-                await self._monitoring_task
-            except asyncio.CancelledError:
-                pass
+        if self._monitoring_thread is not None and self._monitoring_thread.is_alive():
+            self._stop_event.set()
+            self._monitoring_thread.join(timeout=5.0)
 
     def is_monitoring(self) -> bool:
         """
-        Check if monitoring task is running.
+        Check if monitoring thread is running.
 
-        Returns True if background task is active.
+        Returns True if background thread is active.
         """
-        return (
-            self._monitoring_task is not None and not self._monitoring_task.done()
-        )
+        return self._monitoring_thread is not None and self._monitoring_thread.is_alive()
 
-    async def check_and_reclaim(self) -> list[str]:
+    def check_and_reclaim(self) -> list[str]:
         """
         Check all languages and reclaim idle LSPs.
 
@@ -124,16 +122,11 @@ class LSPTimeoutManager:
             if idle_time > timeout:
                 reclaimed.append(language)
                 if self._reclaim_callback is not None:
-                    # Handle both async and sync callbacks (for testing with Mock)
-                    result = self._reclaim_callback(language)
-                    if inspect.iscoroutine(result):
-                        await result
+                    self._reclaim_callback(language)
 
         return reclaimed
 
-    def set_reclaim_callback(
-        self, callback: Callable[[str], Awaitable[None]]
-    ) -> None:
+    def set_reclaim_callback(self, callback: Callable[[str], None]) -> None:
         """
         Set callback for when an LSP needs to be reclaimed.
 
@@ -141,14 +134,16 @@ class LSPTimeoutManager:
         """
         self._reclaim_callback = callback
 
-    async def _monitor_loop(self) -> None:
-        """Background task that periodically checks for idle LSPs."""
-        while True:
-            await asyncio.sleep(self._check_interval)
+    def _monitor_loop(self) -> None:
+        """Background thread that periodically checks for idle LSPs."""
+        while not self._stop_event.is_set():
+            self._stop_event.wait(timeout=self._check_interval)
+            if self._stop_event.is_set():
+                break
             try:
-                await self.check_and_reclaim()
+                self.check_and_reclaim()
             except Exception as e:
-                # Log error but continue monitoring - don't crash the background task
+                # Log error but continue monitoring - don't crash the background thread
                 logger.exception(
                     "Error in LSPTimeoutManager monitor loop: %s",
                     e,

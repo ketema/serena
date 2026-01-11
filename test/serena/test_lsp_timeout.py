@@ -2,16 +2,22 @@
 Tests for LSPTimeoutManager - manages per-language idle timeouts for LSP reclamation.
 
 Following adversarial TDD approach: Tests written FIRST before implementation.
-Contract: contracts/lsp_timeout_contract.py (verified: 2026-01-11)
+Contract: contracts/lsp_timeout_contract.py (verified: 2026-01-11, SYNC v2)
 Issue: REQ-4 - LSP lifecycle management with idle timeouts
 
 STRUCTURAL BLINDNESS: This test suite is written without access to implementation code.
 All error messages must be self-documenting for the coder agent.
+
+SYNC v2 INTERFACE:
+- All methods are synchronous (no async/await)
+- Background monitoring via daemon threading.Thread (not asyncio.Task)
+- Thread-safety via threading.Lock for shared state
+- Callback is Callable[[str], None] (sync, not async)
 """
 
-import asyncio
 import shutil
 import tempfile
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock
@@ -434,8 +440,6 @@ class TestLSPTimeoutManagerTouch:
         python_time = timeout_manager.get_last_used("python")
 
         # Small delay to ensure different timestamps
-        import time
-
         time.sleep(0.01)
 
         timeout_manager.touch("rust")
@@ -454,7 +458,7 @@ class TestLSPTimeoutManagerTouch:
 
 
 class TestLSPTimeoutManagerMonitoring:
-    """Test async monitoring task per contract POST-3."""
+    """Test monitoring methods per contract POST-3."""
 
     def setup_method(self):
         """Set up test environment before each test method."""
@@ -465,30 +469,29 @@ class TestLSPTimeoutManagerMonitoring:
         """Clean up test environment after each test method."""
         shutil.rmtree(self.test_dir)
 
-    @pytest.mark.asyncio
-    async def test_start_monitoring_creates_background_task(self):
+    def test_start_monitoring_creates_daemon_thread(self):
         """
-        Test start_monitoring() creates and runs background task.
+        Test start_monitoring() creates and runs daemon thread (SYNC v2).
 
         CONTRACT: POST-3 (start_monitoring)
-        - Background task created and running
-        - Monitoring runs asynchronously (INV-3)
+        - Daemon thread created and running
+        - Monitoring runs in background without blocking
 
-        WHAT: await start_monitoring() call
+        WHAT: start_monitoring() call (SYNC - no await)
         WHY: REQ-4 requires background monitoring for idle LSP detection
-        EXPECTED: Background asyncio.Task created and running
-        ACTUAL: Task state = {task_state}
-        GUIDANCE: start_monitoring() must create async background task:
-            - Create asyncio.Task for monitoring loop
-            - Store task reference in self._monitoring_task
-            - Task should loop with asyncio.sleep(check_interval)
+        EXPECTED: Daemon threading.Thread created and running
+        ACTUAL: Thread state = {thread_state}
+        GUIDANCE: start_monitoring() must create daemon thread:
+            - Create threading.Thread(target=self._monitor_loop, daemon=True)
+            - Store thread reference in self._monitoring_thread
+            - Thread should loop with time.sleep(check_interval)
             - Provide is_monitoring() method for test verification
         """
         from serena.lsp_timeout import LSPTimeoutManager
 
         timeout_manager = LSPTimeoutManager()
 
-        await timeout_manager.start_monitoring()
+        timeout_manager.start_monitoring()
 
         # Need way to verify monitoring started
         try:
@@ -497,110 +500,112 @@ class TestLSPTimeoutManagerMonitoring:
             pytest.fail(
                 "❌ MISSING METHOD: is_monitoring() method not found\n"
                 "WHAT FAILED: timeout_manager.is_monitoring()\n"
-                "WHY: Tests need to verify POST-3 (monitoring task running)\n"
+                "WHY: Tests need to verify POST-3 (monitoring thread running)\n"
                 "EXPECTED: Method is_monitoring() -> bool\n"
                 "ACTUAL: AttributeError - method does not exist\n"
                 "GUIDANCE: Add status method for test verification:\n"
                 "  def is_monitoring(self) -> bool:\n"
-                "      return self._monitoring_task is not None and not self._monitoring_task.done()"
+                "      return self._monitoring_thread is not None and self._monitoring_thread.is_alive()"
             )
 
         assert is_monitoring is True, (
-            f"❌ MONITORING NOT STARTED: Background task not running\n"
+            f"❌ MONITORING NOT STARTED: Daemon thread not running\n"
             f"WHAT FAILED: is_monitoring() returned False after start_monitoring()\n"
-            f"WHY: POST-3 requires monitoring task to be created and running\n"
-            f"EXPECTED: True (monitoring task is active)\n"
+            f"WHY: POST-3 requires monitoring thread to be created and running\n"
+            f"EXPECTED: True (monitoring thread is active)\n"
             f"ACTUAL: {is_monitoring}\n"
-            f"GUIDANCE: start_monitoring() must create background task:\n"
-            f"  self._monitoring_task = asyncio.create_task(self._monitor_loop())\n"
-            f"  async def _monitor_loop(self):\n"
-            f"      while True:\n"
-            f"          await self.check_and_reclaim()\n"
-            f"          await asyncio.sleep(self.check_interval)"
+            f"GUIDANCE: start_monitoring() must create daemon thread:\n"
+            f"  self._monitoring_thread = threading.Thread(target=self._monitor_loop, daemon=True)\n"
+            f"  self._monitoring_thread.start()\n"
+            f"  def _monitor_loop(self):\n"
+            f"      while self._running:\n"
+            f"          self.check_and_reclaim()\n"
+            f"          time.sleep(self.check_interval)"
         )
 
-    @pytest.mark.asyncio
-    async def test_start_monitoring_idempotent(self):
+    def test_start_monitoring_idempotent(self):
         """
         Test start_monitoring() is idempotent (safe to call multiple times).
 
         CONTRACT: PRE-3 (start_monitoring)
         - Safe to call multiple times (idempotent)
-        - Does not create duplicate tasks
+        - Does not create duplicate threads
 
-        WHAT: await start_monitoring() called twice
+        WHAT: start_monitoring() called twice
         WHY: REQ-4 requires safe initialization (may be called multiple times)
-        EXPECTED: Only one monitoring task running (not duplicates)
-        ACTUAL: Task count = {task_count}
+        EXPECTED: Only one monitoring thread running (not duplicates)
+        ACTUAL: Thread count = {thread_count}
         GUIDANCE: start_monitoring() must check if already monitoring:
             - if self.is_monitoring(): return  # already started
-            - Only create new task if not already monitoring
-            - Prevents duplicate background tasks
+            - Only create new thread if not already monitoring
+            - Prevents duplicate background threads
         """
         from serena.lsp_timeout import LSPTimeoutManager
 
         timeout_manager = LSPTimeoutManager()
 
-        await timeout_manager.start_monitoring()
+        timeout_manager.start_monitoring()
         first_call_monitoring = timeout_manager.is_monitoring()
 
-        await timeout_manager.start_monitoring()  # Second call
+        timeout_manager.start_monitoring()  # Second call
         second_call_monitoring = timeout_manager.is_monitoring()
 
         assert first_call_monitoring is True and second_call_monitoring is True, (
             f"❌ IDEMPOTENCY ERROR: start_monitoring() not idempotent\n"
             f"WHAT FAILED: Multiple start_monitoring() calls caused issues\n"
             f"WHY: PRE-3 requires start_monitoring() to be safe to call multiple times\n"
-            f"EXPECTED: Both calls succeed, single task remains running\n"
+            f"EXPECTED: Both calls succeed, single thread remains running\n"
             f"ACTUAL: first={first_call_monitoring}, second={second_call_monitoring}\n"
             f"GUIDANCE: Implement idempotency check:\n"
-            f"  async def start_monitoring(self):\n"
+            f"  def start_monitoring(self):\n"
             f"      if self.is_monitoring():\n"
             f"          return  # already started\n"
-            f"      self._monitoring_task = asyncio.create_task(...)"
+            f"      self._monitoring_thread = threading.Thread(target=...)"
         )
 
-    @pytest.mark.asyncio
-    async def test_stop_monitoring_cancels_task(self):
+    def test_stop_monitoring_stops_daemon_thread(self):
         """
-        Test stop_monitoring() cancels background task.
+        Test stop_monitoring() stops daemon thread (SYNC v2).
 
         CONTRACT: POST (stop_monitoring)
-        - Monitoring task is cancelled
+        - Monitoring thread is stopped via _running flag
         - Safe to call even if not monitoring
 
-        WHAT: await stop_monitoring() after start_monitoring()
+        WHAT: stop_monitoring() after start_monitoring()
         WHY: REQ-4 requires clean shutdown for resource cleanup
         EXPECTED: is_monitoring() returns False after stop
         ACTUAL: is_monitoring() = {is_monitoring}
-        GUIDANCE: stop_monitoring() must cancel monitoring task:
-            - Cancel self._monitoring_task if it exists
-            - Catch and ignore asyncio.CancelledError
-            - Set self._monitoring_task = None
-            - Safe to call even if task is None
+        GUIDANCE: stop_monitoring() must stop monitoring thread:
+            - Set self._running = False to exit loop
+            - Join thread with timeout
+            - Set self._monitoring_thread = None
+            - Safe to call even if thread is None
         """
         from serena.lsp_timeout import LSPTimeoutManager
 
         timeout_manager = LSPTimeoutManager()
 
-        await timeout_manager.start_monitoring()
+        timeout_manager.start_monitoring()
         assert timeout_manager.is_monitoring() is True
 
-        await timeout_manager.stop_monitoring()
+        timeout_manager.stop_monitoring()
+
+        # Give thread time to exit
+        time.sleep(0.2)
+
         is_monitoring = timeout_manager.is_monitoring()
 
         assert is_monitoring is False, (
-            f"❌ STOP FAILED: Monitoring task not cancelled\n"
+            f"❌ STOP FAILED: Monitoring thread not stopped\n"
             f"WHAT FAILED: is_monitoring() still True after stop_monitoring()\n"
-            f"WHY: stop_monitoring() must cancel background task\n"
+            f"WHY: stop_monitoring() must stop daemon thread\n"
             f"EXPECTED: False (monitoring stopped)\n"
             f"ACTUAL: {is_monitoring}\n"
-            f"GUIDANCE: stop_monitoring() must cancel task:\n"
-            f"  if self._monitoring_task:\n"
-            f"      self._monitoring_task.cancel()\n"
-            f"      try: await self._monitoring_task\n"
-            f"      except asyncio.CancelledError: pass\n"
-            f"      self._monitoring_task = None"
+            f"GUIDANCE: stop_monitoring() must stop thread:\n"
+            f"  self._running = False  # Signal loop to exit\n"
+            f"  if self._monitoring_thread:\n"
+            f"      self._monitoring_thread.join(timeout=1.0)\n"
+            f"      self._monitoring_thread = None"
         )
 
 
@@ -616,9 +621,8 @@ class TestLSPTimeoutManagerReclaim:
         """Clean up test environment after each test method."""
         shutil.rmtree(self.test_dir)
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize("idle_seconds,timeout_seconds,should_reclaim,description", RECLAIM_TEST_CASES)
-    async def test_check_and_reclaim_contract_cases(self, idle_seconds, timeout_seconds, should_reclaim, description):
+    def test_check_and_reclaim_contract_cases(self, idle_seconds, timeout_seconds, should_reclaim, description):
         """
         Test check_and_reclaim() behavior per contract test cases.
 
@@ -666,11 +670,11 @@ class TestLSPTimeoutManagerReclaim:
                     "  Or provide set_last_used() method for testing"
                 )
 
-            # Mock the LSP shutdown to verify it's called
+            # Mock the LSP shutdown to verify it's called (SYNC - Mock not AsyncMock)
             reclaim_callback = Mock()
             timeout_manager.set_reclaim_callback(reclaim_callback)
 
-            reclaimed_languages = await timeout_manager.check_and_reclaim()
+            reclaimed_languages = timeout_manager.check_and_reclaim()
 
         if should_reclaim:
             assert "test_lang" in reclaimed_languages, (
@@ -694,24 +698,22 @@ class TestLSPTimeoutManagerReclaim:
                 f"  if idle_time > timeout:  # strictly greater, not equal"
             )
 
-    @pytest.mark.asyncio
-    async def test_check_and_reclaim_calls_lsp_manager_shutdown(self):
+    def test_check_and_reclaim_calls_callback(self):
         """
-        Test check_and_reclaim() integrates with LSPManager for actual shutdown.
+        Test check_and_reclaim() integrates with callback for actual shutdown (SYNC v2).
 
-        WHAT: check_and_reclaim() with idle LSP and mocked LSPManager
+        WHAT: check_and_reclaim() with idle LSP and mocked callback
         WHY: REQ-4 requires actual LSP shutdown to free memory resources
-        EXPECTED: LSPManager.shutdown_language(lang) called for idle languages
-        ACTUAL: shutdown_language calls = {calls}
-        GUIDANCE: check_and_reclaim() must integrate with LSPManager:
-            - Accept lsp_manager in constructor (optional for testing)
-            - For each idle language, call: lsp_manager.shutdown_language(lang)
-            - Only call if lsp_manager is provided (test mode may omit)
-            - Use callback pattern: set_reclaim_callback(callback) for testing
+        EXPECTED: Callback(lang) called for idle languages (SYNC - Mock not AsyncMock)
+        ACTUAL: callback calls = {calls}
+        GUIDANCE: check_and_reclaim() must integrate with callback:
+            - For each idle language, call: self._reclaim_callback(lang)
+            - Only call if _reclaim_callback is not None
+            - Callback is SYNC (Callable[[str], None]), not async
         """
         from serena.lsp_timeout import LSPTimeoutManager
 
-        # Create manager with mock callback
+        # Create manager with mock callback (SYNC)
         timeout_manager = LSPTimeoutManager(timeout_config={"test_lang": 1800})
 
         # Set last_used to expired time
@@ -719,11 +721,11 @@ class TestLSPTimeoutManagerReclaim:
         timeout_manager.touch("test_lang")
         timeout_manager._last_used["test_lang"] = past_time
 
-        # Mock reclaim callback
+        # Mock reclaim callback (SYNC - Mock not AsyncMock)
         reclaim_callback = Mock()
         timeout_manager.set_reclaim_callback(reclaim_callback)
 
-        await timeout_manager.check_and_reclaim()
+        timeout_manager.check_and_reclaim()
 
         assert reclaim_callback.called, (
             f"❌ INTEGRATION ERROR: Reclaim callback not called\n"
@@ -731,18 +733,15 @@ class TestLSPTimeoutManagerReclaim:
             f"WHY: REQ-4 requires actual LSP shutdown for resource cleanup\n"
             f"EXPECTED: reclaim_callback('test_lang') called once\n"
             f"ACTUAL: reclaim_callback.called = {reclaim_callback.called}\n"
-            f"GUIDANCE: Invoke callback on reclaim:\n"
+            f"GUIDANCE: Invoke callback on reclaim (SYNC):\n"
             f"  if self._reclaim_callback:\n"
-            f"      self._reclaim_callback(language)\n"
-            f"  Or: if self._lsp_manager:\n"
-            f"      await self._lsp_manager.shutdown_language(language)"
+            f"      self._reclaim_callback(language)  # SYNC call, no await"
         )
 
         # Verify callback called with correct language
         reclaim_callback.assert_called_with("test_lang")
 
-    @pytest.mark.asyncio
-    async def test_check_and_reclaim_returns_empty_list_when_all_active(self):
+    def test_check_and_reclaim_returns_empty_list_when_all_active(self):
         """
         Test check_and_reclaim() returns empty list when no LSPs are idle.
 
@@ -768,7 +767,7 @@ class TestLSPTimeoutManagerReclaim:
         timeout_manager.touch("rust")
         timeout_manager.touch("typescript")
 
-        reclaimed = await timeout_manager.check_and_reclaim()
+        reclaimed = timeout_manager.check_and_reclaim()
 
         assert reclaimed == [], (
             f"❌ FALSE RECLAIM: Reclaimed active languages\n"
@@ -786,7 +785,7 @@ class TestLSPTimeoutManagerReclaim:
 
 
 class TestLSPTimeoutManagerIntegration:
-    """Integration tests for LSPTimeoutManager with LSPManager."""
+    """Integration tests for LSPTimeoutManager."""
 
     def setup_method(self):
         """Set up test environment before each test method."""
@@ -799,16 +798,16 @@ class TestLSPTimeoutManagerIntegration:
 
     def test_set_reclaim_callback_method_exists(self):
         """
-        Test set_reclaim_callback() method for LSPManager integration.
+        Test set_reclaim_callback() method for callback integration.
 
         WHAT: timeout_manager.set_reclaim_callback(callback) call
         WHY: Tests need to verify LSP shutdown integration without full LSPManager
         EXPECTED: Method exists and stores callback for later invocation
         ACTUAL: Method {exists_or_missing}
         GUIDANCE: Provide callback setter for flexible integration:
-            def set_reclaim_callback(self, callback):
+            def set_reclaim_callback(self, callback: Callable[[str], None] | None):
                 self._reclaim_callback = callback
-            In production: callback = lsp_manager.shutdown_language
+            In production: callback = lsp_manager.shutdown_language (SYNC)
             In tests: callback = Mock() for verification
         """
         from serena.lsp_timeout import LSPTimeoutManager
@@ -823,24 +822,23 @@ class TestLSPTimeoutManagerIntegration:
             pytest.fail(
                 "❌ MISSING METHOD: set_reclaim_callback() method not found\n"
                 "WHAT FAILED: timeout_manager.set_reclaim_callback(callback)\n"
-                "WHY: Tests need to mock LSPManager integration for verification\n"
-                "EXPECTED: Method set_reclaim_callback(callback) -> None\n"
+                "WHY: Tests need to mock integration for verification\n"
+                "EXPECTED: Method set_reclaim_callback(callback: Callable[[str], None] | None) -> None\n"
                 "ACTUAL: AttributeError - method does not exist\n"
                 "GUIDANCE: Add callback setter for flexible integration:\n"
                 "  def set_reclaim_callback(self, callback):\n"
                 "      self._reclaim_callback = callback\n"
                 "  Then in check_and_reclaim():\n"
                 "      if self._reclaim_callback:\n"
-                "          self._reclaim_callback(language)"
+                "          self._reclaim_callback(language)  # SYNC call"
             )
 
-    @pytest.mark.asyncio
-    async def test_monitoring_loop_calls_check_and_reclaim_periodically(self):
+    def test_monitoring_loop_calls_check_and_reclaim_periodically(self):
         """
         Test monitoring loop calls check_and_reclaim() at regular intervals.
 
         CONTRACT: INV-3, POST-3
-        - Monitoring runs asynchronously without blocking
+        - Monitoring runs in daemon thread without blocking
         - check_interval defines periodic check frequency (60s recommended)
 
         WHAT: start_monitoring() with short check_interval for testing
@@ -848,10 +846,10 @@ class TestLSPTimeoutManagerIntegration:
         EXPECTED: check_and_reclaim() called multiple times over time
         ACTUAL: Call count = {call_count} after {duration} seconds
         GUIDANCE: Monitoring loop must call check_and_reclaim() periodically:
-            async def _monitor_loop(self):
-                while True:
-                    await self.check_and_reclaim()
-                    await asyncio.sleep(self.check_interval)
+            def _monitor_loop(self):
+                while self._running:
+                    self.check_and_reclaim()
+                    time.sleep(self.check_interval)
             Accept check_interval parameter (default 60 seconds)
             For testing, use short interval (e.g., 0.1 seconds)
         """
@@ -876,29 +874,29 @@ class TestLSPTimeoutManagerIntegration:
         _original_check = timeout_manager.check_and_reclaim
         call_count = 0
 
-        async def mock_check():
+        def mock_check():
             nonlocal call_count
             call_count += 1
             return []
 
         timeout_manager.check_and_reclaim = mock_check
 
-        await timeout_manager.start_monitoring()
+        timeout_manager.start_monitoring()
 
         # Wait for multiple check cycles
-        await asyncio.sleep(0.35)  # Should get ~3 calls at 0.1s interval
+        time.sleep(0.35)  # Should get ~3 calls at 0.1s interval
 
-        await timeout_manager.stop_monitoring()
+        timeout_manager.stop_monitoring()
 
         assert call_count >= 2, (
             f"❌ MONITORING LOOP ERROR: check_and_reclaim() not called periodically\n"
             f"WHAT FAILED: Monitoring loop did not call check_and_reclaim() multiple times\n"
-            f"WHY: INV-3 requires async monitoring without blocking\n"
+            f"WHY: INV-3 requires daemon thread monitoring without blocking\n"
             f"EXPECTED: >= 2 calls (with 0.1s interval over 0.35s)\n"
             f"ACTUAL: {call_count} calls\n"
             f"GUIDANCE: Implement monitoring loop:\n"
-            f"  async def _monitor_loop(self):\n"
-            f"      while True:\n"
-            f"          await self.check_and_reclaim()\n"
-            f"          await asyncio.sleep(self.check_interval)"
+            f"  def _monitor_loop(self):\n"
+            f"      while self._running:\n"
+            f"          self.check_and_reclaim()\n"
+            f"          time.sleep(self.check_interval)"
         )

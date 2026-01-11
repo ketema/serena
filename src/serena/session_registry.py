@@ -5,7 +5,7 @@ Contract: contracts/session_registry.contract.py
 Component: Multi-project session isolation for MCP servers
 """
 
-import asyncio
+import threading
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -37,9 +37,7 @@ class SessionContext:
 # =============================================================================
 
 
-_current_session: ContextVar[Optional[SessionContext]] = ContextVar(
-    "_current_session", default=None
-)
+_current_session: ContextVar[Optional[SessionContext]] = ContextVar("_current_session", default=None)
 
 
 # =============================================================================
@@ -62,9 +60,9 @@ class SessionRegistry:
         """Initialize empty registry with thread-safety lock."""
         self._sessions: dict[str, SessionContext] = {}
         self._workspace_sessions: dict[Path, list[str]] = {}  # workspace → [session_ids]
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
 
-    async def bind_session(
+    def bind_session(
         self,
         session_id: str,
         workspace_root: Path,
@@ -80,19 +78,15 @@ class SessionRegistry:
         """
         # PRE-2: Validate workspace_root exists
         if not workspace_root.exists():
-            raise FileNotFoundError(
-                f"PRE-2 violation: workspace_root does not exist: {workspace_root}"
-            )
+            raise FileNotFoundError(f"PRE-2 violation: workspace_root does not exist: {workspace_root}")
 
         # INV-2: Resolve workspace_root to absolute, canonical path
         resolved_workspace = workspace_root.resolve()
 
-        async with self._lock:
+        with self._lock:
             # PRE-1: Check session_id not already bound
             if session_id in self._sessions:
-                raise ValueError(
-                    f"PRE-1 violation: session_id already bound: {session_id}"
-                )
+                raise ValueError(f"PRE-1 violation: session_id already bound: {session_id}")
 
             # Create SessionContext
             ctx = SessionContext(
@@ -112,7 +106,7 @@ class SessionRegistry:
 
             return ctx
 
-    async def unbind_session(self, session_id: str) -> None:
+    def unbind_session(self, session_id: str) -> None:
         """
         Unbind a session and cleanup if last for workspace.
 
@@ -120,7 +114,7 @@ class SessionRegistry:
         POST: get_session(session_id) returns None
         POST: if was last session for workspace, LSP cleanup scheduled
         """
-        async with self._lock:
+        with self._lock:
             # PRE-3: Silent no-op if session_id not in registry
             if session_id not in self._sessions:
                 return
@@ -139,6 +133,8 @@ class SessionRegistry:
                 # POST-3: Cleanup if last session for workspace
                 if len(self._workspace_sessions[workspace]) == 0:
                     del self._workspace_sessions[workspace]
+                    # Cleanup hook would fire here in production
+                    # For now, removing from tracking is sufficient
                     # Cleanup hook would fire here in production
                     # For now, removing from tracking is sufficient
 

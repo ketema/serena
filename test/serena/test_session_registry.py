@@ -1,21 +1,27 @@
 """
 Adversarial TDD tests for SessionRegistry + SessionContext.
 
-Contract: contracts/session_registry.contract.py (verified: 2026-01-11)
+Contract: contracts/session_registry_contract.py (verified: 2026-01-11, SYNC v2)
 Component: SessionRegistry for multi-project MCP session isolation
 
 Test Writer is BLIND to implementation - error messages are specifications.
 Coder is BLIND to test source - implements from error messages only.
 
+SYNC v2 INTERFACE:
+- All methods are synchronous (no async/await)
+- Thread-safety via threading.Lock (not asyncio.Lock)
+- Compatible with sync SerenaAgent integration points
+
 Requirements tested:
 - REQ-1: Two MCP clients connect simultaneously to different projects without interference
 - REQ-2: Session A cannot access files in Session B's project
-- REQ-3: ContextVar propagation survives await boundaries
-- REQ-4: Thread-safe bind/unbind with asyncio.Lock
+- REQ-3: ContextVar propagation (sync - no await boundaries)
+- REQ-4: Thread-safe bind/unbind with threading.Lock
 - REQ-5: Cleanup on last session for workspace
 """
 
-import asyncio
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -66,8 +72,7 @@ def session_registry():
 class TestSimultaneousMultiProjectSessions:
     """REQ-1: Two MCP clients connect simultaneously to different projects without interference."""
 
-    @pytest.mark.asyncio
-    async def test_bind_two_sessions_different_workspaces(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
+    def test_bind_two_sessions_different_workspaces(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
         """
         WHAT: Bind two sessions to different workspaces simultaneously
         WHY: REQ-1 requires sessions to not interfere with each other
@@ -76,11 +81,11 @@ class TestSimultaneousMultiProjectSessions:
         GUIDANCE: Sessions MUST maintain separate workspace_root values.
                   Implementation free to choose storage: dict, list, or other thread-safe structure.
         """
-        # Bind session A to workspace A
-        await session_registry.bind_session(session_id="session-a", workspace_root=temp_workspace_a, source="explicit")
+        # Bind session A to workspace A (SYNC - no await)
+        session_registry.bind_session(session_id="session-a", workspace_root=temp_workspace_a, source="explicit")
 
-        # Bind session B to workspace B
-        await session_registry.bind_session(session_id="session-b", workspace_root=temp_workspace_b, source="explicit")
+        # Bind session B to workspace B (SYNC - no await)
+        session_registry.bind_session(session_id="session-b", workspace_root=temp_workspace_b, source="explicit")
 
         # Verify both sessions exist
         retrieved_a = session_registry.get_session("session-a")
@@ -94,7 +99,7 @@ class TestSimultaneousMultiProjectSessions:
             "4. ACTUAL: get_session('session-a') returned None\n"
             "5. GUIDANCE: bind_session MUST store session_id → SessionContext mapping.\n"
             "             POST-1 contract violation: session_id not retrievable after bind.\n"
-            "             Implementation free to use dict, concurrent.futures, or asyncio primitives."
+            "             Implementation free to use dict, concurrent.futures, or threading primitives."
         )
 
         assert retrieved_b is not None, (
@@ -143,31 +148,45 @@ class TestSimultaneousMultiProjectSessions:
             "             Check: Are you overwriting session_id during bind?"
         )
 
-    @pytest.mark.asyncio
-    async def test_concurrent_bind_operations(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
+    def test_concurrent_bind_operations(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
         """
         WHAT: Bind two sessions concurrently (race condition test)
         WHY: REQ-4 requires thread-safe bind/unbind operations
         EXPECTED: Both binds succeed without data corruption
         ACTUAL: (will be determined by test run)
-        GUIDANCE: bind_session MUST use asyncio.Lock or equivalent synchronization.
+        GUIDANCE: bind_session MUST use threading.Lock or equivalent synchronization.
                   INV-4 contract: all mutations are atomic.
         """
-        # Concurrent bind operations
-        results = await asyncio.gather(
-            session_registry.bind_session("session-1", temp_workspace_a, "explicit"),
-            session_registry.bind_session("session-2", temp_workspace_b, "explicit"),
-        )
+        # Concurrent bind operations (threading instead of asyncio)
+        errors = []
 
-        assert len(results) == 2, (
+        def bind_1():
+            try:
+                session_registry.bind_session("session-1", temp_workspace_a, "explicit")
+            except Exception as e:
+                errors.append(("session-1", e))
+
+        def bind_2():
+            try:
+                session_registry.bind_session("session-2", temp_workspace_b, "explicit")
+            except Exception as e:
+                errors.append(("session-2", e))
+
+        threads = [threading.Thread(target=bind_1), threading.Thread(target=bind_2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert len(errors) == 0, (
             "ERROR MESSAGE (5-point standard):\n"
-            "1. WHAT FAILED: asyncio.gather returned != 2 results\n"
-            "2. WHY: REQ-4 violation - concurrent bind operations failed\n"
-            "3. EXPECTED: Both bind_session calls complete successfully (2 results)\n"
-            f"4. ACTUAL: asyncio.gather returned {len(results)} results\n"
+            "1. WHAT FAILED: Concurrent bind operations raised exceptions\n"
+            "2. WHY: REQ-4 violation - bind_session not thread-safe\n"
+            "3. EXPECTED: Both bind_session calls complete successfully (0 errors)\n"
+            f"4. ACTUAL: Errors: {errors}\n"
             "5. GUIDANCE: bind_session MUST be thread-safe for concurrent calls.\n"
             "             INV-4 contract: all mutations are atomic.\n"
-            "             Use asyncio.Lock to protect registry mutations."
+            "             Use threading.Lock to protect registry mutations."
         )
 
         # Verify both sessions exist
@@ -182,7 +201,7 @@ class TestSimultaneousMultiProjectSessions:
             f"4. ACTUAL: ctx_1={ctx_1}, ctx_2={ctx_2}\n"
             "5. GUIDANCE: Race condition detected - concurrent bind operations interfered.\n"
             "             INV-4 contract violation: mutations not atomic.\n"
-            "             Use async with lock: before modifying internal registry dict."
+            "             Use with lock: before modifying internal registry dict."
         )
 
 
@@ -194,8 +213,7 @@ class TestSimultaneousMultiProjectSessions:
 class TestSessionFileAccessIsolation:
     """REQ-2: Session A cannot access files in Session B's project."""
 
-    @pytest.mark.asyncio
-    async def test_session_workspace_boundary_enforcement(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
+    def test_session_workspace_boundary_enforcement(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
         """
         WHAT: Verify sessions have correct workspace_root boundaries
         WHY: REQ-2 requires file access isolation between sessions
@@ -204,9 +222,9 @@ class TestSessionFileAccessIsolation:
         GUIDANCE: SessionContext MUST store resolved, absolute workspace_root.
                   File access tools MUST validate paths against session.workspace_root.
         """
-        # Bind sessions
-        await session_registry.bind_session("session-a", temp_workspace_a, "explicit")
-        await session_registry.bind_session("session-b", temp_workspace_b, "explicit")
+        # Bind sessions (SYNC)
+        session_registry.bind_session("session-a", temp_workspace_a, "explicit")
+        session_registry.bind_session("session-b", temp_workspace_b, "explicit")
 
         # Get contexts
         ctx_a = session_registry.get_session("session-a")
@@ -246,8 +264,7 @@ class TestSessionFileAccessIsolation:
             "             INV-2 contract: workspace_root is always absolute, resolved path."
         )
 
-    @pytest.mark.asyncio
-    async def test_symlink_resolution_for_boundary_check(self, session_registry: Any, tmp_path: Path):
+    def test_symlink_resolution_for_boundary_check(self, session_registry: Any, tmp_path: Path):
         """
         WHAT: Verify workspace_root resolves symlinks before boundary check
         WHY: REQ-2 + constraint "symlinks resolved before boundary check"
@@ -264,8 +281,8 @@ class TestSessionFileAccessIsolation:
         symlink_workspace = tmp_path / "symlink_workspace"
         symlink_workspace.symlink_to(real_workspace)
 
-        # Bind via symlink
-        ctx = await session_registry.bind_session("session-sym", symlink_workspace, "explicit")
+        # Bind via symlink (SYNC)
+        ctx = session_registry.bind_session("session-sym", symlink_workspace, "explicit")
 
         # Verify workspace_root is resolved (no symlinks)
         assert ctx.workspace_root == real_workspace.resolve(), (
@@ -292,38 +309,37 @@ class TestSessionFileAccessIsolation:
 
 
 # =============================================================================
-# REQ-3: CONTEXTVAR PROPAGATION ACROSS AWAIT
+# REQ-3: CONTEXTVAR PROPAGATION (SYNC)
 # =============================================================================
 
 
 class TestContextVarPropagation:
-    """REQ-3: ContextVar propagation survives await boundaries."""
+    """REQ-3: ContextVar propagation (sync - no await boundaries)."""
 
-    @pytest.mark.asyncio
-    async def test_contextvar_survives_await_boundary(self, session_registry: Any, temp_workspace_a: Path):
+    def test_contextvar_survives_function_calls(self, session_registry: Any, temp_workspace_a: Path):
         """
-        WHAT: Verify SessionContext accessible after await boundary
-        WHY: REQ-3 requires ContextVar propagation across async calls
-        EXPECTED: Same SessionContext retrievable before and after await
+        WHAT: Verify SessionContext accessible across function calls (sync)
+        WHY: REQ-3 requires ContextVar propagation (adapted for sync)
+        EXPECTED: Same SessionContext retrievable before and after function calls
         ACTUAL: (will be determined by test run)
-        GUIDANCE: Use contextvars.ContextVar (NOT threading.local) for async compatibility.
-                  ContextVar automatically propagates across await boundaries.
+        GUIDANCE: Use contextvars.ContextVar for thread-local storage.
+                  ContextVar propagates within same thread execution context.
         """
-        # Bind session
-        await session_registry.bind_session("session-cv", temp_workspace_a, "explicit")
+        # Bind session (SYNC)
+        session_registry.bind_session("session-cv", temp_workspace_a, "explicit")
 
-        # Get context before await
+        # Get context before function call
         ctx_before = session_registry.get_session("session-cv")
 
-        # Simulate async operation (await boundary)
-        await asyncio.sleep(0.01)
+        # Simulate function call boundary (no await in sync version)
+        def nested_function():
+            return session_registry.get_session("session-cv")
 
-        # Get context after await
-        ctx_after = session_registry.get_session("session-cv")
+        ctx_after = nested_function()
 
         assert ctx_before is not None, (
             "ERROR MESSAGE (5-point standard):\n"
-            "1. WHAT FAILED: get_session('session-cv') returned None before await\n"
+            "1. WHAT FAILED: get_session('session-cv') returned None before function call\n"
             "2. WHY: Session not bound correctly\n"
             "3. EXPECTED: get_session returns SessionContext after bind_session\n"
             "4. ACTUAL: get_session returned None\n"
@@ -333,83 +349,90 @@ class TestContextVarPropagation:
 
         assert ctx_after is not None, (
             "ERROR MESSAGE (5-point standard):\n"
-            "1. WHAT FAILED: get_session('session-cv') returned None after await\n"
-            "2. WHY: REQ-3 violation - ContextVar did not survive await boundary\n"
-            "3. EXPECTED: Same SessionContext retrievable after await asyncio.sleep(0.01)\n"
-            "4. ACTUAL: get_session returned None after await\n"
-            "5. GUIDANCE: Use contextvars.ContextVar instead of threading.local.\n"
-            "             threading.local does NOT propagate across await boundaries.\n"
-            "             ContextVar automatically propagates to awaited coroutines."
+            "1. WHAT FAILED: get_session('session-cv') returned None after function call\n"
+            "2. WHY: REQ-3 violation - ContextVar did not survive function boundary\n"
+            "3. EXPECTED: Same SessionContext retrievable after nested function call\n"
+            "4. ACTUAL: get_session returned None after function call\n"
+            "5. GUIDANCE: Use contextvars.ContextVar for thread-local storage.\n"
+            "             ContextVar propagates within same thread execution.\n"
+            "             Check: Are you using global state instead of ContextVar?"
         )
 
         # Verify same context (object identity or equality)
         assert ctx_before.session_id == ctx_after.session_id, (
             "ERROR MESSAGE (5-point standard):\n"
-            "1. WHAT FAILED: SessionContext changed after await boundary\n"
+            "1. WHAT FAILED: SessionContext changed after function boundary\n"
             "2. WHY: REQ-3 violation - ContextVar propagation failed\n"
-            "3. EXPECTED: Same session_id before and after await ('session-cv')\n"
+            "3. EXPECTED: Same session_id before and after function call ('session-cv')\n"
             f"4. ACTUAL: before={ctx_before.session_id}, after={ctx_after.session_id}\n"
-            "5. GUIDANCE: ContextVar MUST propagate across await boundaries.\n"
-            "             Check: Are you using threading.local? (does not propagate)\n"
-            "             Use contextvars.ContextVar for async compatibility."
+            "5. GUIDANCE: ContextVar MUST propagate within same thread.\n"
+            "             Check: Are you using threading.local? (does not propagate across function calls)\n"
+            "             Use contextvars.ContextVar for proper propagation."
         )
 
-    @pytest.mark.asyncio
-    async def test_contextvar_isolation_between_concurrent_tasks(
+    def test_contextvar_isolation_between_threads(
         self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path
     ):
         """
-        WHAT: Verify ContextVar isolation between concurrent async tasks
-        WHY: REQ-3 + asyncio semantics require task-level isolation
-        EXPECTED: Each task sees its own SessionContext
+        WHAT: Verify ContextVar isolation between threads
+        WHY: REQ-3 requires thread-level isolation (adapted from async task isolation)
+        EXPECTED: Each thread sees its own SessionContext
         ACTUAL: (will be determined by test run)
-        GUIDANCE: ContextVar provides task-local storage (not global).
-                  Each asyncio.create_task gets isolated ContextVar copy.
+        GUIDANCE: ContextVar provides thread-local storage (not global).
+                  Each thread gets isolated ContextVar value.
         """
+        results = {}
 
-        async def task_a():
-            """Task A binds to workspace A and verifies isolation."""
-            await session_registry.bind_session("task-a-session", temp_workspace_a, "explicit")
-            await asyncio.sleep(0.05)  # Let task B run
-            ctx = session_registry.get_session("task-a-session")
-            assert ctx is not None, "Task A session disappeared after await"
-            assert ctx.workspace_root == temp_workspace_a.resolve(), "Task A workspace changed"
-            return ctx
+        def thread_a():
+            """Thread A binds to workspace A and verifies isolation."""
+            session_registry.bind_session("thread-a-session", temp_workspace_a, "explicit")
+            time.sleep(0.05)  # Let thread B run
+            ctx = session_registry.get_session("thread-a-session")
+            assert ctx is not None, "Thread A session disappeared after sleep"
+            assert ctx.workspace_root == temp_workspace_a.resolve(), "Thread A workspace changed"
+            results["a"] = ctx
 
-        async def task_b():
-            """Task B binds to workspace B and verifies isolation."""
-            await asyncio.sleep(0.02)  # Let task A bind first
-            await session_registry.bind_session("task-b-session", temp_workspace_b, "explicit")
-            await asyncio.sleep(0.05)  # Let task A verify
-            ctx = session_registry.get_session("task-b-session")
-            assert ctx is not None, "Task B session disappeared after await"
-            assert ctx.workspace_root == temp_workspace_b.resolve(), "Task B workspace changed"
-            return ctx
+        def thread_b():
+            """Thread B binds to workspace B and verifies isolation."""
+            time.sleep(0.02)  # Let thread A bind first
+            session_registry.bind_session("thread-b-session", temp_workspace_b, "explicit")
+            time.sleep(0.05)  # Let thread A verify
+            ctx = session_registry.get_session("thread-b-session")
+            assert ctx is not None, "Thread B session disappeared after sleep"
+            assert ctx.workspace_root == temp_workspace_b.resolve(), "Thread B workspace changed"
+            results["b"] = ctx
 
-        # Run tasks concurrently
-        ctx_a, ctx_b = await asyncio.gather(task_a(), task_b())
+        # Run threads concurrently
+        threads = [threading.Thread(target=thread_a), threading.Thread(target=thread_b)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        ctx_a = results["a"]
+        ctx_b = results["b"]
 
         # Verify isolation: different sessions
         assert ctx_a.session_id != ctx_b.session_id, (
             "ERROR MESSAGE (5-point standard):\n"
-            "1. WHAT FAILED: Concurrent tasks have same session_id\n"
-            "2. WHY: REQ-3 violation - ContextVar not isolated between tasks\n"
-            "3. EXPECTED: task_a and task_b have different session_id values\n"
+            "1. WHAT FAILED: Concurrent threads have same session_id\n"
+            "2. WHY: REQ-3 violation - ContextVar not isolated between threads\n"
+            "3. EXPECTED: thread_a and thread_b have different session_id values\n"
             f"4. ACTUAL: both have session_id == {ctx_a.session_id}\n"
-            "5. GUIDANCE: Each asyncio.create_task MUST get isolated ContextVar copy.\n"
+            "5. GUIDANCE: Each thread MUST get isolated ContextVar value.\n"
             "             Check: Are you using global state instead of ContextVar?\n"
-            "             ContextVar provides task-local storage automatically."
+            "             ContextVar provides thread-local storage automatically."
         )
 
         # Verify isolation: different workspaces
         assert ctx_a.workspace_root != ctx_b.workspace_root, (
             "ERROR MESSAGE (5-point standard):\n"
-            "1. WHAT FAILED: Concurrent tasks have same workspace_root\n"
-            "2. WHY: REQ-3 violation - ContextVar state leaked between tasks\n"
-            "3. EXPECTED: task_a → workspace_a, task_b → workspace_b\n"
+            "1. WHAT FAILED: Concurrent threads have same workspace_root\n"
+            "2. WHY: REQ-3 violation - ContextVar state leaked between threads\n"
+            "3. EXPECTED: thread_a → workspace_a, thread_b → workspace_b\n"
             f"4. ACTUAL: both have workspace_root == {ctx_a.workspace_root}\n"
-            "5. GUIDANCE: ContextVar MUST provide task-level isolation.\n"
-            "             Each task should maintain separate SessionContext.\n"
+            "5. GUIDANCE: ContextVar MUST provide thread-level isolation.\n"
+            "             Each thread should maintain separate SessionContext.\n"
             "             Verify: Are you using ContextVar.set() correctly in bind_session?"
         )
 
@@ -420,27 +443,33 @@ class TestContextVarPropagation:
 
 
 class TestThreadSafeBindUnbind:
-    """REQ-4: Thread-safe bind/unbind with asyncio.Lock."""
+    """REQ-4: Thread-safe bind/unbind with threading.Lock."""
 
-    @pytest.mark.asyncio
-    async def test_concurrent_bind_and_unbind(self, session_registry: Any, temp_workspace_a: Path):
+    def test_concurrent_bind_and_unbind(self, session_registry: Any, temp_workspace_a: Path):
         """
         WHAT: Concurrent bind and unbind operations on different sessions
         WHY: REQ-4 requires all mutations to be thread-safe
         EXPECTED: No race conditions, all operations complete atomically
         ACTUAL: (will be determined by test run)
-        GUIDANCE: Use asyncio.Lock to protect all registry mutations.
+        GUIDANCE: Use threading.Lock to protect all registry mutations.
                   INV-4 contract: all mutations are atomic.
         """
-        # Bind initial sessions
-        await session_registry.bind_session("session-1", temp_workspace_a, "explicit")
-        await session_registry.bind_session("session-2", temp_workspace_a, "explicit")
+        # Bind initial sessions (SYNC)
+        session_registry.bind_session("session-1", temp_workspace_a, "explicit")
+        session_registry.bind_session("session-2", temp_workspace_a, "explicit")
 
         # Concurrent bind new session + unbind old session
-        await asyncio.gather(
-            session_registry.bind_session("session-3", temp_workspace_a, "explicit"),
-            session_registry.unbind_session("session-1"),
-        )
+        def bind_3():
+            session_registry.bind_session("session-3", temp_workspace_a, "explicit")
+
+        def unbind_1():
+            session_registry.unbind_session("session-1")
+
+        threads = [threading.Thread(target=bind_3), threading.Thread(target=unbind_1)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
 
         # Verify state consistency
         ctx_1 = session_registry.get_session("session-1")
@@ -455,7 +484,7 @@ class TestThreadSafeBindUnbind:
             f"4. ACTUAL: get_session('session-1') returned {ctx_1}\n"
             "5. GUIDANCE: unbind_session MUST remove session from registry.\n"
             "             POST-2 contract: session_id no longer in registry after unbind.\n"
-            "             Use async with lock: to ensure atomic removal."
+            "             Use with lock: to ensure atomic removal."
         )
 
         assert ctx_2 is not None, (
@@ -466,7 +495,7 @@ class TestThreadSafeBindUnbind:
             "4. ACTUAL: get_session('session-2') returned None\n"
             "5. GUIDANCE: unbind_session MUST NOT affect other sessions.\n"
             "             INV-4 contract violation: mutations not atomic.\n"
-            "             Use asyncio.Lock to protect concurrent bind/unbind."
+            "             Use threading.Lock to protect concurrent bind/unbind."
         )
 
         assert ctx_3 is not None, (
@@ -477,11 +506,10 @@ class TestThreadSafeBindUnbind:
             "4. ACTUAL: get_session('session-3') returned None\n"
             "5. GUIDANCE: bind_session and unbind_session MUST use same lock.\n"
             "             INV-4 contract: all mutations are atomic.\n"
-            "             Ensure async with self._lock: protects both operations."
+            "             Ensure with self._lock: protects both operations."
         )
 
-    @pytest.mark.asyncio
-    async def test_double_bind_same_session_id(self, session_registry: Any, temp_workspace_a: Path):
+    def test_double_bind_same_session_id(self, session_registry: Any, temp_workspace_a: Path):
         """
         WHAT: Attempt to bind same session_id twice
         WHY: PRE-1 precondition requires session_id not already bound
@@ -490,13 +518,13 @@ class TestThreadSafeBindUnbind:
         GUIDANCE: bind_session MUST check if session_id already exists.
                   PRE-1 contract: session_id not already bound.
         """
-        # First bind succeeds
-        ctx1 = await session_registry.bind_session("duplicate-session", temp_workspace_a, "explicit")
+        # First bind succeeds (SYNC)
+        ctx1 = session_registry.bind_session("duplicate-session", temp_workspace_a, "explicit")
         assert ctx1 is not None
 
         # Second bind with same session_id should raise or no-op
         with pytest.raises((ValueError, RuntimeError)):
-            await session_registry.bind_session("duplicate-session", temp_workspace_a, "explicit")
+            session_registry.bind_session("duplicate-session", temp_workspace_a, "explicit")
 
         # If no exception, verify original session unchanged
         ctx_after = session_registry.get_session("duplicate-session")
@@ -508,7 +536,7 @@ class TestThreadSafeBindUnbind:
             "4. ACTUAL: Second bind succeeded and changed activation_time\n"
             "5. GUIDANCE: bind_session MUST check if session_id in registry.\n"
             "             PRE-1 precondition: session_id not already bound.\n"
-            "             Raise ValueError if session_id exists, or use async with lock: check."
+            "             Raise ValueError if session_id exists, or use with lock: check."
         )
 
 
@@ -520,8 +548,7 @@ class TestThreadSafeBindUnbind:
 class TestCleanupOnLastSession:
     """REQ-5: Cleanup on last session for workspace."""
 
-    @pytest.mark.asyncio
-    async def test_cleanup_when_last_session_unbinds(self, session_registry: Any, temp_workspace_a: Path):
+    def test_cleanup_when_last_session_unbinds(self, session_registry: Any, temp_workspace_a: Path):
         """
         WHAT: Unbind last session for a workspace and verify cleanup scheduled
         WHY: REQ-5 requires cleanup when last session for workspace unbinds
@@ -530,8 +557,8 @@ class TestCleanupOnLastSession:
         GUIDANCE: unbind_session MUST check if this is last session for workspace.
                   POST-3 contract: if last session, LSPs scheduled for cleanup.
         """
-        # Bind single session to workspace
-        await session_registry.bind_session("only-session", temp_workspace_a, "explicit")
+        # Bind single session to workspace (SYNC)
+        session_registry.bind_session("only-session", temp_workspace_a, "explicit")
 
         # Verify workspace has one session
         sessions = session_registry.get_sessions_for_workspace(temp_workspace_a)
@@ -546,8 +573,8 @@ class TestCleanupOnLastSession:
             "             Implementation free to use: dict[workspace → list[session_id]]."
         )
 
-        # Unbind the only session
-        await session_registry.unbind_session("only-session")
+        # Unbind the only session (SYNC)
+        session_registry.unbind_session("only-session")
 
         # Verify session removed
         ctx = session_registry.get_session("only-session")
@@ -573,8 +600,7 @@ class TestCleanupOnLastSession:
             "             Check: len(get_sessions_for_workspace(workspace)) == 0 after unbind."
         )
 
-    @pytest.mark.asyncio
-    async def test_no_cleanup_when_other_sessions_remain(self, session_registry: Any, temp_workspace_a: Path):
+    def test_no_cleanup_when_other_sessions_remain(self, session_registry: Any, temp_workspace_a: Path):
         """
         WHAT: Unbind one session when other sessions for workspace remain
         WHY: REQ-5 requires cleanup ONLY on last session unbind
@@ -583,9 +609,9 @@ class TestCleanupOnLastSession:
         GUIDANCE: unbind_session MUST count remaining sessions for workspace.
                   POST-3 only applies if len(sessions_for_workspace) becomes 0.
         """
-        # Bind two sessions to same workspace
-        await session_registry.bind_session("session-1", temp_workspace_a, "explicit")
-        await session_registry.bind_session("session-2", temp_workspace_a, "explicit")
+        # Bind two sessions to same workspace (SYNC)
+        session_registry.bind_session("session-1", temp_workspace_a, "explicit")
+        session_registry.bind_session("session-2", temp_workspace_a, "explicit")
 
         # Verify two sessions for workspace
         sessions = session_registry.get_sessions_for_workspace(temp_workspace_a)
@@ -599,8 +625,8 @@ class TestCleanupOnLastSession:
             "             Multiple sessions CAN bind to same workspace (shared project access)."
         )
 
-        # Unbind first session (not last)
-        await session_registry.unbind_session("session-1")
+        # Unbind first session (not last) (SYNC)
+        session_registry.unbind_session("session-1")
 
         # Verify second session still exists (cleanup NOT triggered)
         ctx_2 = session_registry.get_session("session-2")
@@ -627,8 +653,7 @@ class TestCleanupOnLastSession:
             "             Remove session_id from workspace's session list."
         )
 
-    @pytest.mark.asyncio
-    async def test_cleanup_multiple_workspaces_independent(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
+    def test_cleanup_multiple_workspaces_independent(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
         """
         WHAT: Unbind last session for workspace A, verify workspace B unaffected
         WHY: REQ-5 cleanup must be workspace-specific (not global)
@@ -637,12 +662,12 @@ class TestCleanupOnLastSession:
         GUIDANCE: unbind_session MUST check sessions for specific workspace only.
                   POST-3 contract applies per-workspace, not globally.
         """
-        # Bind sessions to different workspaces
-        await session_registry.bind_session("session-a", temp_workspace_a, "explicit")
-        await session_registry.bind_session("session-b", temp_workspace_b, "explicit")
+        # Bind sessions to different workspaces (SYNC)
+        session_registry.bind_session("session-a", temp_workspace_a, "explicit")
+        session_registry.bind_session("session-b", temp_workspace_b, "explicit")
 
-        # Unbind workspace A session
-        await session_registry.unbind_session("session-a")
+        # Unbind workspace A session (SYNC)
+        session_registry.unbind_session("session-a")
 
         # Verify workspace A cleanup triggered
         sessions_a = session_registry.get_sessions_for_workspace(temp_workspace_a)
@@ -680,10 +705,9 @@ class TestCleanupOnLastSession:
 
 
 class TestContractAdherence:
-    """Verify implementation adheres to contracts/session_registry.contract.py."""
+    """Verify implementation adheres to contracts/session_registry_contract.py."""
 
-    @pytest.mark.asyncio
-    async def test_session_context_has_required_fields(self, session_registry: Any, temp_workspace_a: Path):
+    def test_session_context_has_required_fields(self, session_registry: Any, temp_workspace_a: Path):
         """
         WHAT: Verify SessionContext has all required fields from contract
         WHY: Contract defines SessionContextContract with 4 required fields
@@ -691,7 +715,7 @@ class TestContractAdherence:
         ACTUAL: (will be determined by test run)
         GUIDANCE: SessionContext MUST implement all fields from SessionContextContract.
         """
-        ctx = await session_registry.bind_session("test-session", temp_workspace_a, "explicit")
+        ctx = session_registry.bind_session("test-session", temp_workspace_a, "explicit")
 
         # Verify required fields exist
         assert hasattr(ctx, "session_id"), (
@@ -763,8 +787,7 @@ class TestContractAdherence:
             "             Use: from datetime import datetime; ctx.activation_time = datetime.now()."
         )
 
-    @pytest.mark.asyncio
-    async def test_unbind_nonexistent_session_is_silent_noop(self, session_registry: Any):
+    def test_unbind_nonexistent_session_is_silent_noop(self, session_registry: Any):
         """
         WHAT: Unbind session_id that doesn't exist
         WHY: PRE-3 contract allows silent no-op if session_id not in registry
@@ -773,9 +796,9 @@ class TestContractAdherence:
         GUIDANCE: unbind_session MUST NOT raise error if session_id not found.
                   PRE-3 contract: silent no-op if session_id not in registry.
         """
-        # Unbind non-existent session (should not raise)
+        # Unbind non-existent session (should not raise) (SYNC)
         try:
-            await session_registry.unbind_session("nonexistent-session")
+            session_registry.unbind_session("nonexistent-session")
         except Exception as e:
             pytest.fail(
                 "ERROR MESSAGE (5-point standard):\n"
@@ -788,8 +811,7 @@ class TestContractAdherence:
                 "             Use: if session_id not in registry: return (no error)."
             )
 
-    @pytest.mark.asyncio
-    async def test_workspace_root_precondition_validation(self, session_registry: Any, tmp_path: Path):
+    def test_workspace_root_precondition_validation(self, session_registry: Any, tmp_path: Path):
         """
         WHAT: Bind session with invalid workspace_root (non-existent directory)
         WHY: PRE-2 precondition requires workspace_root.exists() == True
@@ -800,9 +822,9 @@ class TestContractAdherence:
         """
         nonexistent_path = tmp_path / "nonexistent_workspace"
 
-        # Should raise error for non-existent workspace
+        # Should raise error for non-existent workspace (SYNC)
         with pytest.raises((ValueError, FileNotFoundError)):
-            await session_registry.bind_session("test-session", nonexistent_path, "explicit")
+            session_registry.bind_session("test-session", nonexistent_path, "explicit")
 
         # If no exception raised, FAIL
         if session_registry.get_session("test-session") is not None:
