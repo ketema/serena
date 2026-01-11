@@ -7,10 +7,16 @@ Mocks for tests MUST derive from this contract (CL10).
 
 Component: LSPTimeoutManager
 Purpose: Manage per-language idle timeouts for LSP reclamation
+
+SYNC INTERFACE (v2):
+- All methods are synchronous (no async/await)
+- Background monitoring via daemon threading.Thread (not asyncio.Task)
+- Thread-safety via threading.Lock for shared state
+- Compatible with sync LanguageServerManager integration points
 """
 
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Callable
 
 
 # =============================================================================
@@ -45,12 +51,13 @@ DEFAULT_TIMEOUTS_SECONDS: dict[str, int] = {
 
 class LSPTimeoutManagerContract:
     """
-    Behavioral contract for LSP timeout management.
+    Behavioral contract for LSP timeout management (SYNC v2).
 
     INVARIANTS:
     - INV-1: All timeout values are positive integers (seconds)
     - INV-2: last_used timestamps are always <= current time
-    - INV-3: Monitoring runs asynchronously without blocking main event loop
+    - INV-3: Monitoring runs in daemon thread without blocking main thread
+    - INV-4: All shared state mutations protected by threading.Lock
 
     PRECONDITIONS:
     - PRE-1 (touch): language is a valid string identifier
@@ -60,7 +67,7 @@ class LSPTimeoutManagerContract:
     POSTCONDITIONS:
     - POST-1 (touch): last_used[language] updated to current time
     - POST-2 (get_timeout): returns configured timeout or default
-    - POST-3 (start_monitoring): background task created and running
+    - POST-3 (start_monitoring): daemon thread created and running
     - POST-4 (reclaim): LSP for language is shutdown if idle > timeout
     """
 
@@ -84,32 +91,50 @@ class LSPTimeoutManagerContract:
         """
         ...
 
-    async def start_monitoring(self) -> None:
+    def start_monitoring(self) -> None:
         """
-        Start background monitoring task.
+        Start background monitoring daemon thread (SYNC).
 
         PRE: not already monitoring (idempotent - safe to call multiple times)
-        POST: monitoring task is running
+        POST: daemon thread is running
         POST: check_interval is reasonable (60 seconds recommended)
+
+        Thread-safety: Creates daemon thread that runs until stop_monitoring called.
         """
         ...
 
-    async def stop_monitoring(self) -> None:
+    def stop_monitoring(self) -> None:
         """
-        Stop background monitoring task.
+        Stop background monitoring daemon thread (SYNC).
 
         PRE: none (safe to call even if not monitoring)
-        POST: monitoring task is cancelled
+        POST: monitoring thread is stopped (via _running flag)
+
+        Thread-safety: Sets _running = False, thread exits on next iteration.
         """
         ...
 
-    async def check_and_reclaim(self) -> list[str]:
+    def check_and_reclaim(self) -> list[str]:
         """
-        Check all languages and reclaim idle LSPs.
+        Check all languages and reclaim idle LSPs (SYNC).
 
         PRE: none
         POST: returns list of reclaimed language names
         POST: for each reclaimed language: (now - last_used[lang]) > timeout[lang]
+
+        Thread-safety: Acquires lock when reading/modifying last_used state.
+        """
+        ...
+
+    def set_reclaim_callback(self, callback: "Callable[[str], None] | None") -> None:
+        """
+        Set the callback to invoke when an LSP should be reclaimed (SYNC).
+
+        PRE: callback is None or callable taking language string
+        POST: callback will be called for each language that exceeds timeout
+
+        NOTE: Callback is SYNC (Callable[[str], None]), not async.
+        The callback runs in the monitoring thread context.
         """
         ...
 

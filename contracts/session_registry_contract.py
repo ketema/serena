@@ -6,6 +6,11 @@ Mocks for tests MUST derive from this contract (CL10).
 
 Component: SessionRegistry
 Purpose: Thread-safe mapping of MCP session_id → SessionContext
+
+SYNC INTERFACE (v2):
+- All methods are synchronous (no async/await)
+- Thread-safety via threading.Lock (not asyncio.Lock)
+- Compatible with sync SerenaAgent integration points
 """
 
 from dataclasses import dataclass
@@ -44,7 +49,7 @@ class SessionRegistryContract:
     - INV-1: session_id is unique across all bound sessions
     - INV-2: workspace_root is always an absolute, resolved path
     - INV-3: A session can only be bound to one workspace at a time
-    - INV-4: All mutations are atomic (thread-safe)
+    - INV-4: All mutations are atomic (thread-safe via threading.Lock)
 
     PRECONDITIONS:
     - PRE-1 (bind): session_id not already bound
@@ -59,31 +64,35 @@ class SessionRegistryContract:
     - POST-4 (get): returns SessionContext if exists, None otherwise
     """
 
-    # Method signatures for contract verification
+    # Method signatures for contract verification (SYNC - v2)
 
-    async def bind_session(
+    def bind_session(
         self,
         session_id: str,
         workspace_root: Path,
         source: Literal["explicit", "auto"] = "explicit"
     ) -> "SessionContextContract":
         """
-        Bind a session to a workspace.
+        Bind a session to a workspace (SYNC).
 
         PRE: session_id not already bound
         PRE: workspace_root.is_absolute() and workspace_root.exists()
         POST: get_session(session_id) returns SessionContext
         POST: returned SessionContext.workspace_root == workspace_root.resolve()
+
+        Thread-safety: Acquires threading.Lock during mutation.
         """
         ...
 
-    async def unbind_session(self, session_id: str) -> None:
+    def unbind_session(self, session_id: str) -> None:
         """
-        Unbind a session and cleanup if last for workspace.
+        Unbind a session and cleanup if last for workspace (SYNC).
 
         PRE: session_id in registry (silent no-op if not)
         POST: get_session(session_id) returns None
         POST: if was last session for workspace, LSP cleanup scheduled
+
+        Thread-safety: Acquires threading.Lock during mutation.
         """
         ...
 
