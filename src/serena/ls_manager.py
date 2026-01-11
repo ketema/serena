@@ -6,6 +6,7 @@ from sensai.util.logging import LogTime
 
 from serena.config.serena_config import SerenaPaths
 from serena.constants import SERENA_MANAGED_DIR_NAME
+from serena.lsp_timeout import LSPTimeoutManager
 from solidlsp import SolidLanguageServer
 from solidlsp.ls_config import Language, LanguageServerConfig
 from solidlsp.settings import SolidLSPSettings
@@ -60,6 +61,8 @@ class LanguageServerManager:
         self,
         language_servers: dict[Language, SolidLanguageServer],
         language_server_factory: LanguageServerFactory | None = None,
+        timeout_manager: LSPTimeoutManager | None = None,
+        enable_timeout_monitoring: bool = False,
     ) -> None:
         """
         :param language_servers: a mapping from language to language server; the servers are assumed to be already started.
@@ -67,11 +70,21 @@ class LanguageServerManager:
             All servers are assumed to serve the same project root.
         :param language_server_factory: factory for language server creation; if None, dynamic (re)creation of language servers
             is not supported
+        :param timeout_manager: optional LSPTimeoutManager for idle timeout tracking
+        :param enable_timeout_monitoring: whether to start timeout monitoring automatically
         """
         self._language_servers = language_servers
         self._language_server_factory = language_server_factory
         self._default_language_server = next(iter(language_servers.values()))
         self._root_path = self._default_language_server.repository_root_path
+
+        # LSP timeout management (optional)
+        self._timeout_manager = timeout_manager or LSPTimeoutManager()
+        self._timeout_manager.set_reclaim_callback(self._reclaim_idle_language_server)
+
+        if enable_timeout_monitoring:
+            self._timeout_manager.start_monitoring()
+            log.info("LSP timeout monitoring started")
 
     @staticmethod
     def from_languages(languages: list[Language], factory: LanguageServerFactory) -> "LanguageServerManager":
@@ -122,6 +135,25 @@ class LanguageServerManager:
     def get_root_path(self) -> str:
         return self._root_path
 
+    def _reclaim_idle_language_server(self, language_name: str) -> None:
+        """
+        Callback invoked by LSPTimeoutManager when a language LSP is idle past its timeout.
+        Stops the language server to free resources.
+
+        :param language_name: the language name (e.g., "python", "rust")
+        """
+        try:
+            language = Language(language_name)
+            if language in self._language_servers:
+                ls = self._language_servers[language]
+                log.info(f"Reclaiming idle language server for {language_name} (idle timeout exceeded)")
+                self._stop_language_server(ls, save_cache=True)
+                # Note: We don't remove from _language_servers - it will be restarted on next access
+        except ValueError:
+            log.warning(f"Unknown language '{language_name}' in reclaim callback - ignoring")
+        except Exception as e:
+            log.error(f"Error reclaiming language server for {language_name}: {e}", exc_info=e)
+
     def _ensure_functional_ls(self, ls: SolidLanguageServer) -> SolidLanguageServer:
         if not ls.is_running():
             log.warning(f"Language server for language {ls.language} is not running; restarting ...")
@@ -137,6 +169,10 @@ class LanguageServerManager:
                     break
         if ls is None:
             ls = self._default_language_server
+
+        # Touch the language to update idle timeout tracking
+        self._timeout_manager.touch(ls.language.value)
+
         return self._ensure_functional_ls(ls)
 
     def _create_and_start_language_server(self, language: Language) -> SolidLanguageServer:
@@ -196,11 +232,16 @@ class LanguageServerManager:
 
     def stop_all(self, save_cache: bool = False, timeout: float = 2.0) -> None:
         """
-        Stops all managed language servers.
+        Stops all managed language servers and timeout monitoring.
 
         :param save_cache: whether to save the cache before stopping
         :param timeout: timeout for shutdown of each language server
         """
+        # Stop timeout monitoring first
+        if self._timeout_manager.is_monitoring():
+            self._timeout_manager.stop_monitoring()
+            log.info("LSP timeout monitoring stopped")
+
         for ls in self.iter_language_servers():
             self._stop_language_server(ls, save_cache=save_cache, timeout=timeout)
 

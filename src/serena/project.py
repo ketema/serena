@@ -10,6 +10,7 @@ from sensai.util.string import ToStringMixin
 from serena.config.serena_config import DEFAULT_TOOL_TIMEOUT, ProjectConfig, get_serena_managed_in_project_dir
 from serena.constants import SERENA_FILE_ENCODING, SERENA_MANAGED_DIR_NAME
 from serena.ls_manager import LanguageServerFactory, LanguageServerManager
+from serena.path_validation import PathBoundaryError, validate_path
 from serena.text_utils import MatchedConsecutiveLines, search_files
 from serena.util.file_system import GitignoreParser, match_path
 from serena.util.general import save_yaml
@@ -243,15 +244,15 @@ class Project(ToStringMixin):
     def is_path_in_project(self, path: str | Path) -> bool:
         """
         Checks if the given (absolute or relative) path is inside the project directory.
-        Note that even relative paths may be outside if they contain ".." or point to symlinks.
-        """
-        path = Path(path)
-        _proj_root = Path(self.project_root)
-        if not path.is_absolute():
-            path = _proj_root / path
+        Uses PathValidation for secure boundary checking with symlink resolution.
 
-        path = path.resolve()
-        return path.is_relative_to(_proj_root)
+        SECURITY: Prevents path traversal attacks via '..' components and symlinks.
+        """
+        try:
+            validate_path(path, Path(self.project_root))
+            return True
+        except (PathBoundaryError, ValueError):
+            return False
 
     def relative_path_exists(self, relative_path: str) -> bool:
         """
@@ -495,3 +496,6 @@ class Project(ToStringMixin):
         if self.language_server_manager is not None:
             self.language_server_manager.stop_all(save_cache=True, timeout=timeout)
             self.language_server_manager = None
+
+    # Alias for backward compatibility - agent.py and cli.py call this method name
+    create_language_server_manager = create_language_server

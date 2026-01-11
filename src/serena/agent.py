@@ -6,9 +6,11 @@ import multiprocessing
 import os
 import platform
 import sys
+import uuid
 import webbrowser
 from collections.abc import Callable
 from logging import Logger
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional, TypeVar
 
 from sensai.util import logging
@@ -23,6 +25,7 @@ from serena.dashboard import SerenaDashboardAPI
 from serena.ls_manager import LanguageServerManager
 from serena.project import Project
 from serena.prompt_factory import SerenaPromptFactory
+from serena.session_registry import SessionRegistry
 from serena.task_executor import TaskExecutor
 from serena.tools import ActivateProjectTool, GetCurrentConfigTool, ReplaceContentTool, Tool, ToolMarker, ToolRegistry
 from serena.util.gui import system_has_usable_display
@@ -188,6 +191,10 @@ class SerenaAgent:
 
         # project-specific instances, which will be initialized upon project activation
         self._active_project: Project | None = None
+
+        # session management for multi-project isolation
+        self._session_registry = SessionRegistry()
+        self._current_session_id: str | None = None
 
         # adjust log level
         serena_log_level = self.serena_config.log_level
@@ -534,7 +541,23 @@ class SerenaAgent:
 
     def _activate_project(self, project: Project) -> None:
         log.info(f"Activating {project.project_name} at {project.project_root}")
+
+        # Unbind previous session if exists (switching projects)
+        if self._current_session_id is not None:
+            self._session_registry.unbind_session(self._current_session_id)
+            self._current_session_id = None
+
         self._active_project = project
+
+        # Bind new session for multi-project isolation
+        self._current_session_id = str(uuid.uuid4())
+        self._session_registry.bind_session(
+            session_id=self._current_session_id,
+            workspace_root=Path(project.project_root),
+            source="explicit",
+        )
+        log.info(f"Session {self._current_session_id} bound to {project.project_root}")
+
         self._update_active_tools()
 
         def init_language_server_manager() -> None:
@@ -706,6 +729,13 @@ class SerenaAgent:
         if not hasattr(self, "_is_initialized"):
             return
         log.info("SerenaAgent is shutting down ...")
+
+        # Unbind session before project shutdown
+        if self._current_session_id is not None:
+            log.info(f"Unbinding session {self._current_session_id}")
+            self._session_registry.unbind_session(self._current_session_id)
+            self._current_session_id = None
+
         if self._active_project is not None:
             self._active_project.shutdown(timeout=timeout)
             self._active_project = None
