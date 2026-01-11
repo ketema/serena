@@ -95,11 +95,12 @@ class LSPTimeoutManagerContract:
         """
         Start background monitoring daemon thread (SYNC).
 
-        PRE: not already monitoring (idempotent - safe to call multiple times)
-        POST: daemon thread is running
+        PRE: none (idempotent - safe to call multiple times)
+        POST: daemon thread is running (or already was running)
         POST: check_interval is reasonable (60 seconds recommended)
 
-        Thread-safety: Creates daemon thread that runs until stop_monitoring called.
+        IDEMPOTENCY: If already monitoring, this is a no-op.
+        Thread-safety: Uses threading.Lock to check/set monitoring state.
         """
         ...
 
@@ -107,10 +108,12 @@ class LSPTimeoutManagerContract:
         """
         Stop background monitoring daemon thread (SYNC).
 
-        PRE: none (safe to call even if not monitoring)
+        PRE: none (idempotent - safe to call even if not monitoring)
         POST: monitoring thread is stopped (via _running flag)
+        POST: blocks until thread terminates (join with timeout)
 
-        Thread-safety: Sets _running = False, thread exits on next iteration.
+        IDEMPOTENCY: If not monitoring, this is a no-op.
+        Thread-safety: Uses threading.Lock to check/set monitoring state.
         """
         ...
 
@@ -133,8 +136,22 @@ class LSPTimeoutManagerContract:
         PRE: callback is None or callable taking language string
         POST: callback will be called for each language that exceeds timeout
 
-        NOTE: Callback is SYNC (Callable[[str], None]), not async.
-        The callback runs in the monitoring thread context.
+        CALLBACK CONTRACT:
+        - Callback is SYNC (Callable[[str], None]), not async
+        - Callback runs in daemon thread context (not main thread)
+        - Callback exceptions are caught, logged, and do NOT terminate monitoring
+        - Callback should be fast (< 1 second) to avoid blocking other reclaims
+        """
+        ...
+
+    def is_monitoring(self) -> bool:
+        """
+        Query whether background monitoring is currently active (SYNC).
+
+        PRE: none
+        POST: returns True if daemon thread is running, False otherwise
+
+        Thread-safety: Safe to call from any thread.
         """
         ...
 
