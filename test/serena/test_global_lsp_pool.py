@@ -723,7 +723,6 @@ class TestGlobalLanguageServerPoolMultiSession:
 
         # Check session tracking
         actual_sessions = pool.get_sessions_for_lsp(Language.RUST, self.project_path)
-        num_sessions = 3
 
         assert num_unique == 1, (
             f"❌ FAILURE: Multiple sessions got different LSP instances\n"
