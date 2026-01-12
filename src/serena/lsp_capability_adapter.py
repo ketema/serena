@@ -477,30 +477,51 @@ class ClangdAdapter(BaseSingleRootAdapter):
         workspace_root: Path,
         session_id: str,
     ) -> list[str]:
-        """
+        r"""
         Return clangd-specific launch arguments with session-isolated cache path.
 
-        Cache path format: /tmp/serena_clangd_{session_hash}_{workspace_hash}
-        - session_hash: Hash of session_id to prevent path traversal attacks
-        - workspace_hash: Ensures different projects use different caches
-        - Deterministic: Same inputs always produce same path
+        REQ-SEC-SANITY: Three-layer defense against path traversal:
+        1. VALIDATE: session_id must match ^[a-zA-Z0-9\-_]+$
+        2. HASH: SHA256 hash eliminates path interpretation
+        3. VERIFY: Final path must resolve to child of /tmp
 
-        SECURITY: session_id is hashed to prevent path injection attacks.
-        An attacker cannot use session_id="../../etc/passwd" to escape the cache directory.
+        Cache path format: /tmp/serena_clangd_{session_hash}_{workspace_hash}
+
+        Raises:
+            ValueError: If session_id fails validation (contains invalid characters)
+
         """
         import hashlib
+        import re
 
-        # SECURITY: Hash session_id to prevent path traversal attacks (SEC-5)
-        # Without this, session_id="../../etc/passwd" could escape /tmp
+        # LAYER 1: VALIDATE - Reject invalid session_ids before processing
+        # REQ-SEC-SANITY: session_id must match ^[a-zA-Z0-9\-_]+$
+        if not re.match(r"^[a-zA-Z0-9\-_]+$", session_id):
+            raise ValueError(
+                f"SEC-5 VIOLATION: session_id contains invalid characters. "
+                f"Expected: ^[a-zA-Z0-9\\-_]+$, Got: {session_id!r}"
+            )
+
+        # LAYER 2: HASH - Eliminate path interpretation risk
         session_hash = hashlib.sha256(session_id.encode()).hexdigest()[:8]
-
-        # Create deterministic hash of workspace_root
         workspace_hash = hashlib.sha256(str(workspace_root).encode()).hexdigest()[:8]
 
-        # Construct session-isolated cache path (both components are safe hashes)
-        cache_path = f"/tmp/serena_clangd_{session_hash}_{workspace_hash}"
+        # Construct cache path
+        cache_dir = Path("/tmp")
+        cache_path = cache_dir / f"serena_clangd_{session_hash}_{workspace_hash}"
 
-        return [f"--cache-path={cache_path}"]
+        # LAYER 3: VERIFY - Ensure resolved path is child of cache directory
+        # REQ-SEC-SANITY: Defense in depth - verify path containment
+        resolved_path = cache_path.resolve()
+        resolved_cache_dir = cache_dir.resolve()
+
+        if not str(resolved_path).startswith(str(resolved_cache_dir) + "/"):
+            raise ValueError(
+                f"SEC-5 VIOLATION: Cache path escapes base directory. "
+                f"Base: {resolved_cache_dir}, Path: {resolved_path}"
+            )
+
+        return [f"--cache-path={resolved_path}"]
 
 
 class DefaultAdapter(BaseSingleRootAdapter):

@@ -348,6 +348,102 @@ def test_concurrent_session_registry_initialization():
         )
 
 
+def test_barrier_concurrent_singleton_initialization():
+    """
+    REQ-TEST-CONCURRENCY: Maximum stress test using threading.Barrier.
+
+    WHAT FAILED: Singleton race condition under maximum concurrent pressure
+    WHY: REQ-DCL-FIX mandates thread-safe initialization without DCL pattern
+    EXPECTED: All 20 threads receive SAME instance despite simultaneous start
+    ACTUAL: [Will be populated by test failure - will show unique instance count]
+    GUIDANCE: threading.Barrier ensures ALL threads start at EXACTLY the same moment.
+              This maximizes race condition probability - if initialization isn't
+              properly synchronized, multiple instances will be created.
+              Observable: 20 concurrent calls → exactly 1 unique instance
+              Critical: This test FAILS with naive lazy initialization
+              Critical: This test FAILS with broken DCL pattern
+
+    ATTACK VECTOR (Prevented):
+    - Without lock: Thread A and B both see _singleton is None
+    - Both create new instances → duplicate singletons
+    - With threading.Barrier: All 20 threads hit check simultaneously
+    - Any race condition is almost guaranteed to manifest
+    """
+    factory = SerenaMCPFactory(project=None)
+
+    # REQ-TEST-CONCURRENCY: Use Barrier for maximum concurrent stress
+    num_threads = 20
+    barrier = threading.Barrier(num_threads)
+
+    results: list[Any] = []
+    results_lock = threading.Lock()
+
+    def barrier_get_all_singletons():
+        """Thread worker: Wait at barrier, then get all singletons simultaneously."""
+        # Wait until ALL threads are ready (maximum concurrent pressure)
+        barrier.wait()
+
+        # Now all threads hit this SIMULTANEOUSLY
+        registry = factory.get_session_registry()
+        bridge = factory.get_session_bridge()
+        pool = factory.get_lsp_pool()
+
+        with results_lock:
+            results.append({
+                "registry": registry,
+                "bridge": bridge,
+                "pool": pool,
+            })
+
+    # Create threads
+    threads = [threading.Thread(target=barrier_get_all_singletons) for _ in range(num_threads)]
+
+    # Start all threads (they will wait at barrier)
+    for t in threads:
+        t.start()
+
+    # Wait for completion
+    for t in threads:
+        t.join()
+
+    # EXPECTED: All threads got same instances
+    assert len(results) == num_threads, f"Sanity: expected {num_threads} results, got {len(results)}"
+
+    # Check SessionRegistry - MUST be exactly 1 unique instance
+    registry_ids = {id(r["registry"]) for r in results}
+    assert len(registry_ids) == 1, (
+        f"REQ-DCL-FIX VIOLATED: Barrier test created {len(registry_ids)} SessionRegistry instances\n"
+        f"WHAT FAILED: threading.Barrier concurrent stress test\n"
+        f"WHY: REQ-DCL-FIX requires thread-safe singleton without DCL pattern\n"
+        f"EXPECTED: Exactly 1 unique SessionRegistry instance\n"
+        f"ACTUAL: {len(registry_ids)} unique instances: {registry_ids}\n"
+        f"GUIDANCE: Singleton initialization MUST use simple lock (no outer if check).\n"
+        f"  Barrier ensures {num_threads} threads hit get_session_registry() simultaneously.\n"
+        f"  Any race condition will create duplicates.\n"
+        f"  Observable: len(unique_ids) == 1"
+    )
+
+    # Check MCPSessionBridge - MUST be exactly 1 unique instance
+    bridge_ids = {id(r["bridge"]) for r in results}
+    assert len(bridge_ids) == 1, (
+        f"REQ-DCL-FIX VIOLATED: Barrier test created {len(bridge_ids)} MCPSessionBridge instances\n"
+        f"WHAT FAILED: threading.Barrier concurrent stress test\n"
+        f"EXPECTED: Exactly 1 unique MCPSessionBridge instance\n"
+        f"ACTUAL: {len(bridge_ids)} unique instances\n"
+        f"GUIDANCE: Same lock pattern required for bridge singleton"
+    )
+
+    # Check GlobalLanguageServerPool - MUST be exactly 1 unique instance
+    pool_ids = {id(r["pool"]) for r in results}
+    assert len(pool_ids) == 1, (
+        f"REQ-DCL-FIX VIOLATED: Barrier test created {len(pool_ids)} GlobalLanguageServerPool instances\n"
+        f"WHAT FAILED: threading.Barrier concurrent stress test\n"
+        f"EXPECTED: Exactly 1 unique GlobalLanguageServerPool instance\n"
+        f"ACTUAL: {len(pool_ids)} unique instances\n"
+        f"GUIDANCE: Same lock pattern required for pool singleton"
+    )
+
+
 def test_concurrent_bridge_initialization():
     """
     Verify MCPSessionBridge singleton is thread-safe under concurrent access.

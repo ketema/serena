@@ -359,16 +359,16 @@ class SerenaMCPFactory:
         Get or create the SessionRegistry singleton.
         Thread-safe lazy initialization ensures only one instance is created.
 
+        REQ-DCL-FIX: Uses simple lock without DCL pattern.
+        DCL is rejected as non-portable in Python (no volatile, memory visibility issues).
+
         :return: The SessionRegistry singleton instance
         """
-        if self._session_registry is None:
-            with self._lock:
-                # Double-check pattern to prevent race conditions
-                if self._session_registry is None:
-                    self._session_registry = SessionRegistry()
-                # CRITICAL: Return inside lock to ensure memory visibility (DCL fix)
-                return self._session_registry
-        return self._session_registry
+        # REQ-DCL-FIX: Simple lock - no outer if check (DCL unsafe in Python)
+        with self._lock:
+            if self._session_registry is None:
+                self._session_registry = SessionRegistry()
+            return self._session_registry
 
     def get_session_bridge(self) -> MCPSessionBridge:
         """
@@ -376,33 +376,31 @@ class SerenaMCPFactory:
         Thread-safe lazy initialization ensures only one instance is created.
         Depends on SessionRegistry being initialized first.
 
+        REQ-DCL-FIX: Uses simple lock without DCL pattern.
+
         :return: The MCPSessionBridge singleton instance
         """
-        if self._session_bridge is None:
-            with self._lock:
-                # Double-check pattern to prevent race conditions
-                if self._session_bridge is None:
-                    session_registry = self.get_session_registry()
-                    self._session_bridge = MCPSessionBridge(session_registry)
-                # CRITICAL: Return inside lock to ensure memory visibility (DCL fix)
-                return self._session_bridge
-        return self._session_bridge
+        # REQ-DCL-FIX: Simple lock - no outer if check (DCL unsafe in Python)
+        with self._lock:
+            if self._session_bridge is None:
+                session_registry = self.get_session_registry()
+                self._session_bridge = MCPSessionBridge(session_registry)
+            return self._session_bridge
 
     def get_lsp_pool(self) -> GlobalLanguageServerPool:
         """
         Get or create the GlobalLanguageServerPool singleton.
         Thread-safe lazy initialization ensures only one instance is created.
 
+        REQ-DCL-FIX: Uses simple lock without DCL pattern.
+
         :return: The GlobalLanguageServerPool singleton instance
         """
-        if self._lsp_pool is None:
-            with self._lock:
-                # Double-check pattern to prevent race conditions
-                if self._lsp_pool is None:
-                    self._lsp_pool = GlobalLanguageServerPool()
-                # CRITICAL: Return inside lock to ensure memory visibility (DCL fix)
-                return self._lsp_pool
-        return self._lsp_pool
+        # REQ-DCL-FIX: Simple lock - no outer if check (DCL unsafe in Python)
+        with self._lock:
+            if self._lsp_pool is None:
+                self._lsp_pool = GlobalLanguageServerPool()
+            return self._lsp_pool
 
     def shutdown(self) -> None:
         """

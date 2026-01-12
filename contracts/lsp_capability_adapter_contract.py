@@ -306,6 +306,14 @@ class LSPCapabilityAdapterContract(ABC):
 
         REQUIREMENTS:
         - REQ-ADAPT-4: Adapter provides launch arguments for isolation
+        - REQ-SEC-SANITY: Implementation MUST sanitize session_id for path safety
+
+        SECURITY CONTRACT (REQ-CONTRACT-SYNC):
+        Implementation MUST sanitize or hash session_id to prevent path traversal.
+        Recommended defense-in-depth approach:
+        1. VALIDATE: session_id against ^[a-zA-Z0-9\\-_]+$ (reject invalid)
+        2. HASH: Use SHA256 or similar to eliminate path interpretation
+        3. VERIFY: Ensure final path resolves within intended directory
 
         BEHAVIOR:
         - Default adapters: Return empty list []
@@ -313,7 +321,10 @@ class LSPCapabilityAdapterContract(ABC):
         - Other LSPs may add memory limits, log paths, etc.
 
         NOTE: Arguments must be safe to append to LSP command line.
-        Implementation MUST ensure workspace isolation via session_id.
+        Raw session_id MUST NEVER appear directly in filesystem paths.
+
+        Raises:
+            ValueError: If session_id fails validation (implementation choice)
         """
         ...
 

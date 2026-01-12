@@ -327,6 +327,7 @@ class GlobalLanguageServerPool:
 
         Loads ProjectConfig from workspace_root if available, otherwise uses defaults.
         REQ-7: Factory MUST respect user's project.yml settings.
+        REQ-ERR-1: Configuration errors are logged, not silently swallowed.
         """
         # Import here to avoid circular dependency
         from serena.config.serena_config import ProjectConfig
@@ -340,13 +341,31 @@ class GlobalLanguageServerPool:
             project_config = ProjectConfig.load(workspace_root, autogenerate=False)
             ignored_paths = project_config.ignored_paths
             encoding = project_config.encoding
+            logger.debug(
+                f"Loaded project config for {workspace_root}: "
+                f"ignored_paths={len(ignored_paths)}, encoding={encoding}"
+            )
         except FileNotFoundError:
-            # No project.yml - use defaults (acceptable for fresh workspaces)
-            pass
-        except Exception:
-            # Malformed config - use defaults but log warning would be appropriate
-            # For now, silently fall back to defaults
-            pass
+            # REQ-ERR-1: No project.yml - use defaults (expected for fresh workspaces)
+            logger.info(
+                f"No project.yml found at {workspace_root}, using default LSP config"
+            )
+        except ValueError as e:
+            # REQ-ERR-1: Validation error in config - log ERROR and use defaults
+            logger.error(
+                f"Invalid project.yml at {workspace_root}: {e}. "
+                f"Using default LSP config. Fix the configuration file."
+            )
+        except Exception as e:
+            # REQ-ERR-1: Unexpected error (permissions, malformed YAML, etc.)
+            # Log CRITICAL and propagate - this is a configuration problem that must be fixed
+            logger.critical(
+                f"Failed to load project.yml at {workspace_root}: {e}. "
+                f"This may indicate file permission issues or corrupted config."
+            )
+            raise RuntimeError(
+                f"REQ-ERR-1: Cannot create LSP - configuration load failed for {workspace_root}"
+            ) from e
 
         # Create LSP config with loaded or default values
         config = LanguageServerConfig(

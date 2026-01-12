@@ -64,12 +64,14 @@ def test_clangd_cache_path_isolation():
     )
 
     # EXPECTED: Cache path starts with expected prefix and has deterministic format
+    # NOTE: On macOS, /tmp resolves to /private/tmp via symlink, so check both
     cache_path = cache_arg.split("=", 1)[1]
-    assert cache_path.startswith("/tmp/serena_clangd_"), (
+    valid_prefixes = ("/tmp/serena_clangd_", "/private/tmp/serena_clangd_")
+    assert any(cache_path.startswith(prefix) for prefix in valid_prefixes), (
         f"REQ-CLANGD-2 VIOLATED: Cache path format unexpected\n"
         f"WHAT FAILED: Cache path prefix check\n"
         f"WHY: Cache paths should be in /tmp with serena_clangd prefix\n"
-        f"EXPECTED: Path starting with '/tmp/serena_clangd_'\n"
+        f"EXPECTED: Path starting with '/tmp/serena_clangd_' or '/private/tmp/serena_clangd_' (macOS)\n"
         f"ACTUAL: {cache_path}\n"
         f"GUIDANCE: Cache path format: /tmp/serena_clangd_<session_hash>_<workspace_hash>"
     )
@@ -249,7 +251,7 @@ def test_default_adapter_empty_list():
     )
 
 
-# Edge case: Session isolation verification
+# Edge case: Valid session isolation verification
 def test_clangd_different_sessions_different_cache():
     """
     Different session_ids MUST produce different cache paths.
@@ -296,79 +298,119 @@ def test_clangd_different_sessions_different_cache():
 
 
 def test_clangd_session_id_path_traversal_prevention():
-    """
-    SEC-5: Session ID MUST be sanitized to prevent path traversal attacks.
+    r"""
+    SEC-5 (REQ-SEC-SANITY): Path traversal attacks MUST be rejected at Layer 1.
 
     GIVEN: ClangdAdapter instance
     WHEN: get_launch_arguments called with malicious session_id containing path traversal
-    THEN: Cache path MUST remain within /tmp (no escape via ../)
+    THEN: MUST raise ValueError (Layer 1 validation rejects invalid characters)
 
     GUIDANCE (Behavioral):
-    - Malicious session_id="../../etc/passwd" MUST NOT escape /tmp
-    - All session_ids produce paths within /tmp/serena_clangd_*
-    - Implementation free to: sanitize, hash, validate, or reject
-    - CRITICAL SECURITY: Path injection is a CONSTITUTIONAL VIOLATION
+    - REQ-SEC-SANITY mandates three-layer defense: VALIDATE → HASH → VERIFY
+    - Layer 1 (VALIDATE): session_id MUST match ^[a-zA-Z0-9\-_]+$
+    - Malicious session_ids with /, .., %, null bytes FAIL validation
+    - Implementation MUST raise ValueError with "SEC-5 VIOLATION" message
+    - CRITICAL SECURITY: Reject early is safer than sanitize late
 
     ATTACK VECTOR (Prevented):
     - Attacker controls session_id via MCP session header
-    - Without sanitization: --cache-path=/tmp/serena_clangd_../../etc/passwd_hash
-    - This could allow reading/writing files outside cache directory
+    - Without validation: --cache-path=/tmp/serena_clangd_../../etc/passwd_hash
+    - With REQ-SEC-SANITY: ValueError raised BEFORE path construction
     """
+    import pytest
+
     adapter = ClangdAdapter()
     workspace = Path("/project-a")
 
     # Malicious session_ids attempting path traversal
+    # REQ-SEC-SANITY Layer 1 MUST reject all of these
     malicious_session_ids = [
-        "../../etc/passwd",
-        "../../../tmp/evil",
-        "session/../../../root",
-        "..%2F..%2Fetc%2Fpasswd",  # URL encoded
-        "session\x00/etc/passwd",  # Null byte injection
-        "/absolute/path/attack",
+        ("../../etc/passwd", "path traversal with .."),
+        ("../../../tmp/evil", "deep path traversal"),
+        ("session/../../../root", "embedded traversal"),
+        ("..%2F..%2Fetc%2Fpasswd", "URL encoded traversal"),
+        ("session\x00/etc/passwd", "null byte injection"),
+        ("/absolute/path/attack", "absolute path injection"),
+        ("session/path", "forward slash in session_id"),
+        ("session.with.dots", "dots that could be confused with .."),
     ]
 
-    for malicious_id in malicious_session_ids:
-        args = adapter.get_launch_arguments(workspace, malicious_id)
+    for malicious_id, attack_type in malicious_session_ids:
+        # REQ-SEC-SANITY Layer 1: MUST raise ValueError for invalid characters
+        with pytest.raises(ValueError) as exc_info:
+            adapter.get_launch_arguments(workspace, malicious_id)
 
-        # Find --cache-path argument
-        cache_arg = None
-        for arg in args:
-            if arg.startswith("--cache-path="):
-                cache_arg = arg
-                break
-
-        assert cache_arg is not None, f"Missing cache-path for session_id={malicious_id!r}"
-        cache_path = cache_arg.split("=", 1)[1]
-
-        # CRITICAL: Path must remain in /tmp/serena_clangd_* (no escape)
-        assert cache_path.startswith("/tmp/serena_clangd_"), (
-            f"SEC-5 VIOLATED: Path traversal attack succeeded\n"
-            f"WHAT FAILED: Path sanitization for malicious session_id\n"
-            f"WHY: Malicious session_id MUST NOT escape cache directory\n"
-            f"EXPECTED: Path starting with '/tmp/serena_clangd_'\n"
-            f"ACTUAL: {cache_path}\n"
-            f"ATTACK INPUT: session_id={malicious_id!r}\n"
-            f"GUIDANCE: session_id MUST be hashed or sanitized before path construction"
+        # EXPECTED: ValueError with SEC-5 VIOLATION message
+        error_msg = str(exc_info.value)
+        assert "SEC-5 VIOLATION" in error_msg, (
+            f"REQ-SEC-SANITY VIOLATED: Invalid session_id not rejected properly\n"
+            f"WHAT FAILED: Layer 1 validation error message\n"
+            f"WHY: Malicious session_id must be rejected with 'SEC-5 VIOLATION' message\n"
+            f"EXPECTED: ValueError containing 'SEC-5 VIOLATION'\n"
+            f"ACTUAL: ValueError with message: {error_msg}\n"
+            f"ATTACK INPUT: session_id={malicious_id!r} ({attack_type})\n"
+            f"GUIDANCE: Layer 1 MUST validate session_id against ^[a-zA-Z0-9\\\\-_]+$"
         )
 
-        # CRITICAL: No path traversal sequences in final path
-        assert ".." not in cache_path, (
-            f"SEC-5 VIOLATED: Path contains traversal sequence\n"
-            f"WHAT FAILED: Path traversal prevention\n"
-            f"WHY: '..' in path allows escaping cache directory\n"
-            f"EXPECTED: Path without '..' sequences\n"
-            f"ACTUAL: {cache_path}\n"
-            f"ATTACK INPUT: session_id={malicious_id!r}\n"
-            f"GUIDANCE: Hash session_id to eliminate special characters"
+        assert "invalid characters" in error_msg.lower(), (
+            f"REQ-SEC-SANITY VIOLATED: Error message doesn't explain rejection reason\n"
+            f"WHAT FAILED: Error message clarity\n"
+            f"WHY: Error messages should explain what failed\n"
+            f"EXPECTED: Message containing 'invalid characters'\n"
+            f"ACTUAL: {error_msg}\n"
+            f"ATTACK INPUT: session_id={malicious_id!r} ({attack_type})\n"
+            f"GUIDANCE: Error message should state what validation failed"
         )
 
-        # CRITICAL: No null bytes (can truncate path)
-        assert "\x00" not in cache_path, (
-            f"SEC-5 VIOLATED: Path contains null byte\n"
-            f"WHAT FAILED: Null byte injection prevention\n"
-            f"WHY: Null bytes can truncate paths in C-based systems\n"
-            f"EXPECTED: Path without null bytes\n"
-            f"ACTUAL: Path contains \\x00\n"
-            f"ATTACK INPUT: session_id={malicious_id!r}\n"
-            f"GUIDANCE: Hash session_id to eliminate null bytes"
+
+def test_clangd_session_id_unicode_normalization_attacks():
+    r"""
+    SEC-5 (REQ-SEC-UNICODE): Unicode normalization attacks MUST be prevented.
+
+    GIVEN: ClangdAdapter instance
+    WHEN: get_launch_arguments called with session_id containing unicode lookalikes
+    THEN: MUST either reject (validation layer) or hash safely (no path interpretation)
+
+    GUIDANCE (Behavioral):
+    - U+2044 FRACTION SLASH (⁄) looks like / but is different codepoint
+    - U+FF0F FULLWIDTH SOLIDUS (／) is visual equivalent of /
+    - U+2215 DIVISION SLASH (∕) another slash lookalike
+    - Implementation MUST use validation layer to reject these OR hash them safely
+    - Path must NEVER interpret these as actual path separators
+
+    ATTACK VECTOR (Prevented):
+    - Attacker uses unicode lookalikes that normalize to ASCII / in some systems
+    - Without defense: session_id="..⁄..⁄etc⁄passwd" might normalize to path traversal
+    - With three-layer defense: validation rejects non-[a-zA-Z0-9\-_] characters
+    """
+    adapter = ClangdAdapter()
+    workspace = Path("/project-a")
+
+    # Unicode lookalike attack vectors
+    unicode_attack_ids = [
+        "session\u2044etc\u2044passwd",  # U+2044 FRACTION SLASH
+        "session\uff0f..\uff0f..",  # U+FF0F FULLWIDTH SOLIDUS
+        "session\u2215root",  # U+2215 DIVISION SLASH
+        "..\u2044..\u2044tmp",  # Combined attack
+        "session\u0000hidden",  # Null in unicode
+        "session\u202e\u002f\u002fetc",  # RTL override + slashes
+    ]
+
+    for attack_id in unicode_attack_ids:
+        # LAYER 1 VALIDATION: Should reject invalid characters
+        # The validation regex ^[a-zA-Z0-9\\-_]+$ rejects unicode
+        import pytest
+
+        with pytest.raises(ValueError) as exc_info:
+            adapter.get_launch_arguments(workspace, attack_id)
+
+        # EXPECTED: ValueError with SEC-5 VIOLATION message
+        assert "SEC-5 VIOLATION" in str(exc_info.value), (
+            f"REQ-SEC-UNICODE VIOLATED: Unicode attack not rejected\n"
+            f"WHAT FAILED: Validation layer didn't catch unicode lookalike\n"
+            f"WHY: Unicode normalization can bypass naive path checks\n"
+            f"EXPECTED: ValueError with 'SEC-5 VIOLATION' message\n"
+            f"ACTUAL: No exception or wrong exception type\n"
+            f"ATTACK INPUT: session_id={attack_id!r} (contains {[hex(ord(c)) for c in attack_id]})\n"
+            f"GUIDANCE: Validation MUST reject non-ASCII or use strict allowlist"
         )
