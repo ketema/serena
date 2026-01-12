@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from serena.global_lsp_pool import GlobalLanguageServerPool
-from serena.path_validation import PathBoundaryError
+from serena.path_validation import PathBoundaryError, validate_path
 from serena.session_registry import SessionContext, SessionRegistry
 from solidlsp import SolidLanguageServer
 from solidlsp.ls_config import Language
@@ -269,6 +269,9 @@ def validate_path_no_existence_check(relative_path: str | Path, project_root: Pa
     """
     Validate path within project boundary without checking if paths exist.
 
+    SECURITY WARNING: This bypasses filesystem existence checks and must not be
+    used in production path validation. Use only in tests with injected validator.
+
     This is a test-compatible version of validate_path that skips filesystem
     existence checks, allowing tests to use fake workspace roots like /workspace-a.
 
@@ -369,7 +372,7 @@ class SessionAwareToolDispatch:
         self,
         session_registry: SessionRegistry,
         lsp_pool: GlobalLanguageServerPool | None = None,
-        path_validator: Callable[[str | Path, Path], Path] = validate_path_no_existence_check,
+        path_validator: Callable[[str | Path, Path], Path] = validate_path,
     ):
         """
         Initialize dispatcher.
@@ -476,7 +479,7 @@ class SessionAwareToolDispatch:
         POST: Path validated against session workspace
         POST: LSP acquired from pool
         POST: Tool executed via LSP
-        POST: LSP timeout touched
+        POST: LSP released back to pool
         POST: Returns tool result
 
         BEHAVIOR:
@@ -487,10 +490,9 @@ class SessionAwareToolDispatch:
            - Raises PathBoundaryError if validation fails
         5. Determine language from file extension
         6. GlobalLanguageServerPool.acquire(language, workspace_root, session_id)
-        7. Ensure LSP is functional (_ensure_functional_ls pattern)
-        8. Execute LSP request
-        9. LSPTimeoutManager.touch(language)
-        10. Return result
+        7. Execute LSP request
+        8. GlobalLanguageServerPool.release(language, workspace_root, session_id)
+        9. Return result
 
         ERROR CONDITIONS:
         - SessionNotFoundError: session_id not in registry
@@ -540,22 +542,26 @@ class SessionAwareToolDispatch:
                 language,
                 "LSP pool not initialized",
             )
-        
+
         try:
-            _lsp = self._lsp_pool.acquire(language, workspace_root, session_id)
+            lsp = self._lsp_pool.acquire(language, workspace_root, session_id)
         except Exception as e:
             raise LSPNotAvailableError(session_id, language, str(e)) from e
 
-        # Step 7-10: Execute LSP request (stub for now)
-        # In production, would call actual LSP methods
-        # The _lsp variable would be used here
-        # The test only validates the dispatch flow
-        return {
-            "status": "dispatched",
-            "tool": tool_name,
-            "language": str(language),
-            "validated_path": str(validated_path),
-        }
+        # Step 7-9: Execute tool and release LSP
+        tool_error: Exception | None = None
+        try:
+            tool_fn = getattr(lsp, tool_name)
+            return tool_fn(**arguments)
+        except Exception as exc:
+            tool_error = exc
+            raise
+        finally:
+            try:
+                self._lsp_pool.release(language, workspace_root, session_id)
+            except Exception:
+                if tool_error is None:
+                    raise
 
     def validate_path_for_session(
         self,
