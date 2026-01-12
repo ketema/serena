@@ -740,6 +740,14 @@ class TestAdapterRegistry:
             def detect_capabilities(self, ls):
                 return {}
 
+            def get_pooling_policy(self):
+                from serena.lsp_capability_adapter import PoolingPolicy
+
+                return PoolingPolicy.ISOLATED_PROCESS
+
+            def get_launch_arguments(self, workspace_root, session_id):
+                return []
+
         custom_adapter = CustomAdapter()
         adapter_registry.register_adapter(Language.RUST, custom_adapter)
 
