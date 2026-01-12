@@ -156,3 +156,30 @@ class SessionRegistry:
         """
         resolved_workspace = workspace_root.resolve()
         return list(self._workspace_sessions.get(resolved_workspace, []))
+
+    def get_session_overview(self) -> dict[str, Any]:
+        """
+        Get overview of all bound sessions.
+
+        PRE: none
+        POST: returns {"sessions": [...], "total_count": int}
+        POST: total_count == len(sessions)
+        POST: each session has: session_id, workspace_root (str), project_name, connected_at (ISO 8601), activation_source
+        POST: project_name == basename(workspace_root)
+        """
+        with self._lock:
+            sessions = []
+            for ctx in self._sessions.values():
+                session_info = {
+                    "session_id": ctx.session_id,
+                    "workspace_root": str(ctx.workspace_root),
+                    "project_name": ctx.workspace_root.name,
+                    "connected_at": ctx.activation_time.isoformat(),
+                    "activation_source": ctx.activation_source,
+                }
+                sessions.append(session_info)
+
+            return {
+                "sessions": sessions,
+                "total_count": len(sessions),
+            }

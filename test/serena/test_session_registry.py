@@ -370,9 +370,7 @@ class TestContextVarPropagation:
             "             Use contextvars.ContextVar for proper propagation."
         )
 
-    def test_contextvar_isolation_between_threads(
-        self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path
-    ):
+    def test_contextvar_isolation_between_threads(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
         """
         WHAT: Verify ContextVar isolation between threads
         WHY: REQ-3 requires thread-level isolation (adapted from async task isolation)
@@ -838,3 +836,394 @@ class TestContractAdherence:
                 "             PRE-2 precondition: workspace_root is valid, existing directory.\n"
                 "             Raise ValueError if not workspace_root.exists()."
             )
+
+
+# =============================================================================
+# REQ-API-1: SESSION OVERVIEW FOR OBSERVABILITY
+# =============================================================================
+
+
+class TestGetSessionOverview:
+    """REQ-API-1: get_session_overview() returns list of active sessions with details."""
+
+    def test_get_session_overview_empty_registry(self, session_registry: Any):
+        """
+        WHAT: Call get_session_overview() when no sessions are bound
+        WHY: REQ-API-1 requires method to work on empty registry
+        EXPECTED: Returns {"sessions": [], "total_count": 0}
+        ACTUAL: (will be determined by test run)
+        GUIDANCE: get_session_overview MUST return empty list when registry has no sessions.
+                  Return format: dict with "sessions" key (list) and "total_count" key (int).
+                  Implementation free to choose: iterate _sessions dict, or track count separately.
+        """
+        overview = session_registry.get_session_overview()
+
+        assert isinstance(overview, dict), (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: get_session_overview() did not return dict\n"
+            "2. WHY: REQ-API-1 violation - return type must be dict\n"
+            "3. EXPECTED: get_session_overview() returns dict with 'sessions' and 'total_count' keys\n"
+            f"4. ACTUAL: returned {type(overview)}\n"
+            "5. GUIDANCE: get_session_overview MUST return dict.\n"
+            "             Return format: {'sessions': [...], 'total_count': N}.\n"
+            "             Implementation free to build dict with literal or dict() constructor."
+        )
+
+        assert "sessions" in overview, (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: overview dict missing 'sessions' key\n"
+            "2. WHY: REQ-API-1 violation - 'sessions' key is required\n"
+            "3. EXPECTED: overview['sessions'] exists and is list\n"
+            f"4. ACTUAL: overview keys: {list(overview.keys())}\n"
+            "5. GUIDANCE: get_session_overview MUST include 'sessions' key.\n"
+            "             Value is list of session detail dicts."
+        )
+
+        assert "total_count" in overview, (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: overview dict missing 'total_count' key\n"
+            "2. WHY: REQ-API-1b violation - 'total_count' key is required\n"
+            "3. EXPECTED: overview['total_count'] exists and is int\n"
+            f"4. ACTUAL: overview keys: {list(overview.keys())}\n"
+            "5. GUIDANCE: get_session_overview MUST include 'total_count' key.\n"
+            "             Value is int matching len(sessions)."
+        )
+
+        assert isinstance(overview["sessions"], list), (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: overview['sessions'] is not a list\n"
+            "2. WHY: REQ-API-1 violation - sessions must be list type\n"
+            f"3. EXPECTED: isinstance(overview['sessions'], list) == True\n"
+            f"4. ACTUAL: type(overview['sessions']) == {type(overview['sessions'])}\n"
+            "5. GUIDANCE: overview['sessions'] MUST be list.\n"
+            "             Implementation free to use: list comprehension, for-loop append, etc."
+        )
+
+        assert len(overview["sessions"]) == 0, (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: Empty registry returned non-empty sessions list\n"
+            "2. WHY: REQ-API-1 violation - no sessions bound, should return empty list\n"
+            f"3. EXPECTED: len(overview['sessions']) == 0\n"
+            f"4. ACTUAL: len(overview['sessions']) == {len(overview['sessions'])}\n"
+            "5. GUIDANCE: When registry has no sessions, return empty list.\n"
+            "             Check: if not self._sessions: return {'sessions': [], 'total_count': 0}."
+        )
+
+        assert overview["total_count"] == 0, (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: Empty registry returned non-zero total_count\n"
+            "2. WHY: REQ-API-1b violation - total_count must match len(sessions)\n"
+            f"3. EXPECTED: overview['total_count'] == 0\n"
+            f"4. ACTUAL: overview['total_count'] == {overview['total_count']}\n"
+            "5. GUIDANCE: total_count MUST equal len(sessions).\n"
+            "             Contract: len(sessions) == total_count (POST condition)."
+        )
+
+    def test_get_session_overview_single_session(self, session_registry: Any, temp_workspace_a: Path):
+        """
+        WHAT: Call get_session_overview() with one bound session
+        WHY: REQ-API-1 requires correct session details returned
+        EXPECTED: Returns list with 1 session containing all required fields
+        ACTUAL: (will be determined by test run)
+        GUIDANCE: Each session dict MUST contain: session_id, workspace_root (str), project_name, connected_at (ISO), activation_source.
+                  connected_at MUST be ISO 8601 format string.
+                  project_name MUST equal basename of workspace_root.
+        """
+        # Bind single session
+        session_registry.bind_session("test-session", temp_workspace_a, "explicit")
+
+        overview = session_registry.get_session_overview()
+
+        assert len(overview["sessions"]) == 1, (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: get_session_overview returned != 1 session\n"
+            "2. WHY: REQ-API-1 violation - registry has 1 session, overview should reflect that\n"
+            f"3. EXPECTED: len(overview['sessions']) == 1\n"
+            f"4. ACTUAL: len(overview['sessions']) == {len(overview['sessions'])}\n"
+            "5. GUIDANCE: get_session_overview MUST return all active sessions.\n"
+            "             Iterate over self._sessions.values() to build list."
+        )
+
+        assert overview["total_count"] == 1, (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: total_count doesn't match sessions length\n"
+            "2. WHY: REQ-API-1b violation - len(sessions) must equal total_count\n"
+            f"3. EXPECTED: overview['total_count'] == 1\n"
+            f"4. ACTUAL: overview['total_count'] == {overview['total_count']}\n"
+            "5. GUIDANCE: total_count MUST equal len(sessions).\n"
+            "             Contract POST condition: len(sessions) == total_count."
+        )
+
+        session_detail = overview["sessions"][0]
+
+        # Verify all required fields present
+        required_fields = ["session_id", "workspace_root", "project_name", "connected_at", "activation_source"]
+        for field in required_fields:
+            assert field in session_detail, (
+                f"ERROR MESSAGE (5-point standard):\n"
+                f"1. WHAT FAILED: session_detail missing required field '{field}'\n"
+                f"2. WHY: REQ-API-1 violation - session dict must contain all required fields\n"
+                f"3. EXPECTED: session_detail['{field}'] exists\n"
+                f"4. ACTUAL: session_detail keys: {list(session_detail.keys())}\n"
+                f"5. GUIDANCE: Each session dict MUST include: {required_fields}.\n"
+                f"             Contract POST condition: session dict contains all 5 fields."
+            )
+
+        # Verify field values
+        assert session_detail["session_id"] == "test-session", (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: session_id in overview doesn't match bound session\n"
+            "2. WHY: REQ-API-1 violation - session_id must be accurate\n"
+            f"3. EXPECTED: session_detail['session_id'] == 'test-session'\n"
+            f"4. ACTUAL: session_detail['session_id'] == {session_detail['session_id']}\n"
+            "5. GUIDANCE: session_id MUST come from SessionContext.session_id.\n"
+            "             Use: ctx.session_id (not modified)."
+        )
+
+        assert session_detail["activation_source"] == "explicit", (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: activation_source incorrect in overview\n"
+            "2. WHY: REQ-API-1 violation - activation_source must reflect bind source\n"
+            f"3. EXPECTED: session_detail['activation_source'] == 'explicit'\n"
+            f"4. ACTUAL: session_detail['activation_source'] == {session_detail['activation_source']}\n"
+            "5. GUIDANCE: activation_source MUST come from SessionContext.activation_source.\n"
+            "             Use: ctx.activation_source (not modified)."
+        )
+
+        # workspace_root should be string (not Path object)
+        assert isinstance(session_detail["workspace_root"], str), (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: workspace_root is not a string\n"
+            "2. WHY: REQ-API-1 violation - workspace_root must be string in overview\n"
+            f"3. EXPECTED: isinstance(session_detail['workspace_root'], str) == True\n"
+            f"4. ACTUAL: type(session_detail['workspace_root']) == {type(session_detail['workspace_root'])}\n"
+            "5. GUIDANCE: workspace_root MUST be converted to string.\n"
+            "             Contract: workspace_root is str (absolute path).\n"
+            "             Use: str(ctx.workspace_root) to convert Path to string."
+        )
+
+        # workspace_root should be absolute path
+        workspace_str = session_detail["workspace_root"]
+        assert Path(workspace_str).is_absolute(), (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: workspace_root is not absolute path\n"
+            "2. WHY: REQ-API-1 violation - workspace_root must be absolute path\n"
+            f"3. EXPECTED: Path(workspace_root).is_absolute() == True\n"
+            f"4. ACTUAL: workspace_root == {workspace_str}\n"
+            "5. GUIDANCE: workspace_root MUST be absolute path.\n"
+            "             Contract: workspace_root is absolute path as string.\n"
+            "             SessionContext.workspace_root is already resolved absolute Path."
+        )
+
+    def test_get_session_overview_multiple_sessions(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
+        """
+        WHAT: Call get_session_overview() with 3 bound sessions
+        WHY: REQ-API-1 requires all sessions returned with correct count
+        EXPECTED: Returns list with 3 sessions, total_count == 3
+        ACTUAL: (will be determined by test run)
+        GUIDANCE: get_session_overview MUST return ALL active sessions.
+                  total_count MUST match len(sessions).
+                  Implementation free to choose: iterate _sessions dict, filter by conditions, etc.
+        """
+        # Bind three sessions to different workspaces
+        session_registry.bind_session("session-1", temp_workspace_a, "explicit")
+        session_registry.bind_session("session-2", temp_workspace_b, "auto")
+        session_registry.bind_session("session-3", temp_workspace_a, "auto")
+
+        overview = session_registry.get_session_overview()
+
+        assert len(overview["sessions"]) == 3, (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: get_session_overview returned != 3 sessions\n"
+            "2. WHY: REQ-API-1 violation - registry has 3 sessions, overview must reflect that\n"
+            f"3. EXPECTED: len(overview['sessions']) == 3\n"
+            f"4. ACTUAL: len(overview['sessions']) == {len(overview['sessions'])}\n"
+            "5. GUIDANCE: get_session_overview MUST return ALL active sessions.\n"
+            "             Check: Are you filtering sessions? (should return all).\n"
+            "             Iterate over self._sessions.values() to build complete list."
+        )
+
+        assert overview["total_count"] == 3, (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: total_count doesn't match sessions length\n"
+            "2. WHY: REQ-API-1b violation - len(sessions) must equal total_count\n"
+            f"3. EXPECTED: overview['total_count'] == 3\n"
+            f"4. ACTUAL: overview['total_count'] == {overview['total_count']}\n"
+            "5. GUIDANCE: total_count MUST equal len(sessions).\n"
+            "             Contract POST condition: len(sessions) == total_count.\n"
+            "             Use: total_count = len(sessions_list) for consistency."
+        )
+
+        # Verify all session IDs present
+        session_ids = {s["session_id"] for s in overview["sessions"]}
+        expected_ids = {"session-1", "session-2", "session-3"}
+
+        assert session_ids == expected_ids, (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: overview missing some session IDs\n"
+            "2. WHY: REQ-API-1 violation - all active sessions must be returned\n"
+            f"3. EXPECTED: session_ids == {expected_ids}\n"
+            f"4. ACTUAL: session_ids == {session_ids}\n"
+            "5. GUIDANCE: get_session_overview MUST include ALL active sessions.\n"
+            "             Missing sessions indicate incomplete iteration over self._sessions."
+        )
+
+        # Verify activation_source values correct
+        for session_detail in overview["sessions"]:
+            sid = session_detail["session_id"]
+            if sid == "session-1":
+                expected_source = "explicit"
+            else:
+                expected_source = "auto"
+
+            assert session_detail["activation_source"] == expected_source, (
+                f"ERROR MESSAGE (5-point standard):\n"
+                f"1. WHAT FAILED: {sid} has wrong activation_source\n"
+                f"2. WHY: REQ-API-1 violation - activation_source must be accurate\n"
+                f"3. EXPECTED: {sid} activation_source == '{expected_source}'\n"
+                f"4. ACTUAL: {sid} activation_source == {session_detail['activation_source']}\n"
+                f"5. GUIDANCE: activation_source MUST come from SessionContext.activation_source.\n"
+                f"             Use: ctx.activation_source (preserve bound value)."
+            )
+
+    def test_get_session_overview_project_name_derived(self, session_registry: Any, temp_workspace_a: Path):
+        """
+        WHAT: Verify project_name equals basename of workspace_root
+        WHY: REQ-API-1 requires project_name be derived from workspace_root
+        EXPECTED: project_name == workspace_root.name (basename)
+        ACTUAL: (will be determined by test run)
+        GUIDANCE: project_name MUST be basename of workspace_root path.
+                  Contract POST condition: project_name == basename(workspace_root).
+                  Implementation: use Path(workspace_root).name or os.path.basename().
+        """
+        session_registry.bind_session("test-session", temp_workspace_a, "explicit")
+
+        overview = session_registry.get_session_overview()
+        session_detail = overview["sessions"][0]
+
+        expected_project_name = temp_workspace_a.name
+
+        assert session_detail["project_name"] == expected_project_name, (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: project_name doesn't match workspace basename\n"
+            "2. WHY: REQ-API-1 violation - project_name must be basename of workspace_root\n"
+            f"3. EXPECTED: project_name == '{expected_project_name}' (workspace_root.name)\n"
+            f"4. ACTUAL: project_name == {session_detail['project_name']}\n"
+            "5. GUIDANCE: project_name MUST be basename of workspace_root.\n"
+            "             Contract POST condition: project_name == basename(workspace_root).\n"
+            "             Use: Path(ctx.workspace_root).name to extract basename."
+        )
+
+    def test_get_session_overview_connected_at_format(self, session_registry: Any, temp_workspace_a: Path):
+        """
+        WHAT: Verify connected_at is valid ISO 8601 datetime string
+        WHY: REQ-API-1 requires connected_at in ISO format for observability
+        EXPECTED: connected_at can be parsed by datetime.fromisoformat()
+        ACTUAL: (will be determined by test run)
+        GUIDANCE: connected_at MUST be ISO 8601 format string.
+                  Contract POST condition: connected_at is valid ISO 8601 datetime string.
+                  Implementation: use activation_time.isoformat() to convert datetime to string.
+        """
+        from datetime import datetime
+
+        session_registry.bind_session("test-session", temp_workspace_a, "explicit")
+
+        overview = session_registry.get_session_overview()
+        session_detail = overview["sessions"][0]
+
+        connected_at = session_detail["connected_at"]
+
+        assert isinstance(connected_at, str), (
+            "ERROR MESSAGE (5-point standard):\n"
+            "1. WHAT FAILED: connected_at is not a string\n"
+            "2. WHY: REQ-API-1 violation - connected_at must be ISO 8601 string\n"
+            f"3. EXPECTED: isinstance(connected_at, str) == True\n"
+            f"4. ACTUAL: type(connected_at) == {type(connected_at)}\n"
+            "5. GUIDANCE: connected_at MUST be string (ISO 8601 format).\n"
+            "             Contract: connected_at is str, not datetime.\n"
+            "             Use: ctx.activation_time.isoformat() to convert."
+        )
+
+        # Verify ISO 8601 format by parsing
+        try:
+            parsed = datetime.fromisoformat(connected_at)
+            assert isinstance(parsed, datetime)
+        except (ValueError, TypeError) as e:
+            pytest.fail(
+                f"ERROR MESSAGE (5-point standard):\n"
+                f"1. WHAT FAILED: connected_at is not valid ISO 8601 format\n"
+                f"2. WHY: REQ-API-1 violation - connected_at must be parseable as ISO 8601\n"
+                f"3. EXPECTED: datetime.fromisoformat(connected_at) succeeds\n"
+                f"4. ACTUAL: fromisoformat raised {type(e).__name__}: {e}\n"
+                f"5. GUIDANCE: connected_at MUST be valid ISO 8601 string.\n"
+                f"             Contract POST condition: connected_at is valid ISO 8601 datetime string.\n"
+                f"             Use: ctx.activation_time.isoformat() for guaranteed ISO 8601 format."
+            )
+
+    def test_get_session_overview_thread_safety(self, session_registry: Any, temp_workspace_a: Path, temp_workspace_b: Path):
+        """
+        WHAT: Call get_session_overview() concurrently with bind/unbind operations
+        WHY: Contract requires get_session_overview to be thread-safe
+        EXPECTED: No race conditions, no crashes, consistent results
+        ACTUAL: (will be determined by test run)
+        GUIDANCE: get_session_overview MUST acquire threading.Lock during read.
+                  Contract: Safe to call concurrently with bind/unbind.
+                  Implementation: Use with self._lock: to protect access to self._sessions.
+        """
+        # Initial sessions
+        session_registry.bind_session("session-1", temp_workspace_a, "explicit")
+        session_registry.bind_session("session-2", temp_workspace_b, "explicit")
+
+        results = {"overview_calls": 0, "errors": []}
+
+        def call_overview():
+            try:
+                for _ in range(5):
+                    overview = session_registry.get_session_overview()
+                    assert isinstance(overview, dict)
+                    assert "sessions" in overview
+                    assert "total_count" in overview
+                    results["overview_calls"] += 1
+                    time.sleep(0.001)  # Small delay to increase contention
+            except Exception as e:
+                results["errors"].append(str(e))
+
+        def bind_unbind():
+            try:
+                for i in range(5):
+                    session_registry.bind_session(f"temp-{i}", temp_workspace_a, "auto")
+                    time.sleep(0.001)
+                    session_registry.unbind_session(f"temp-{i}")
+            except Exception as e:
+                results["errors"].append(str(e))
+
+        # Run concurrent operations
+        threads = [threading.Thread(target=call_overview), threading.Thread(target=call_overview), threading.Thread(target=bind_unbind)]
+
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        # Verify no errors occurred
+        assert len(results["errors"]) == 0, (
+            f"ERROR MESSAGE (5-point standard):\n"
+            f"1. WHAT FAILED: Concurrent get_session_overview calls raised errors\n"
+            f"2. WHY: Thread-safety violation - get_session_overview not protected by lock\n"
+            f"3. EXPECTED: get_session_overview completes without errors during concurrent bind/unbind\n"
+            f"4. ACTUAL: Errors occurred: {results['errors']}\n"
+            f"5. GUIDANCE: get_session_overview MUST use threading.Lock.\n"
+            f"             Contract: Safe to call concurrently with bind/unbind.\n"
+            f"             Use: with self._lock: when accessing self._sessions."
+        )
+
+        # Verify overview calls succeeded
+        assert results["overview_calls"] == 10, (
+            f"ERROR MESSAGE (5-point standard):\n"
+            f"1. WHAT FAILED: Not all overview calls completed\n"
+            f"2. WHY: Thread-safety issue - calls blocked or crashed\n"
+            f"3. EXPECTED: 10 successful overview calls (2 threads x 5 calls)\n"
+            f"4. ACTUAL: {results['overview_calls']} calls completed\n"
+            f"5. GUIDANCE: get_session_overview MUST complete reliably under concurrent load.\n"
+            f"             Check: Are you using correct lock acquisition pattern?"
+        )
