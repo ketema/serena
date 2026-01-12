@@ -15,14 +15,12 @@ These tests use REAL components (no mocks for Registry, Pool, Dispatcher).
 
 import logging
 import re
-import tempfile
 import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import StringIO
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -187,11 +185,11 @@ languages:
         # Step 3: Cleanup
         registry.unbind_session(session_id)
         assert registry.get_session(session_id) is None, (
-            f"test_stack_integrity_single_session FAILED | "
-            f"REQ-INT-1 violated: Session cleanup failed | "
-            f"Expected: get_session returns None after unbind | "
-            f"Actual: Session still exists | "
-            f"Guidance: unbind_session() MUST remove session from registry"
+            "test_stack_integrity_single_session FAILED | "
+            "REQ-INT-1 violated: Session cleanup failed | "
+            "Expected: get_session returns None after unbind | "
+            "Actual: Session still exists | "
+            "Guidance: unbind_session() MUST remove session from registry"
         )
 
     def test_concurrent_isolation(self, registry, pool, bridge, temp_projects):
