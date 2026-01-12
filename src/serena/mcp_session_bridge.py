@@ -19,7 +19,7 @@ import asyncio
 import logging
 import threading
 from collections.abc import Callable
-from contextvars import ContextVar, Token, copy_context
+from contextvars import ContextVar, Token
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -209,25 +209,95 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         func: Callable[[], Any],
     ) -> Any:
         """
-        Run sync function with session context propagated to thread pool.
+        Execute func within a session-bound logging context.
 
-        PRE: session_id is valid session ID
-        PRE: func is callable taking no arguments
-        POST: func executed with session_id in ContextVar
+        PRE: session_id is non-empty string.
+        PRE: func is callable.
+        
+        POST: All logging.LogRecords emitted by func (including descendants)
+              MUST contain a 'session_id' attribute equal to session_id.
+        POST: The log format MUST include "[Session: {session_id}]" prefix.
+        POST: On function exit (success or failure), the logging context MUST 
+              be restored to its previous state (Leak Prevention).
+        
+        INV: Concurrency Safety: Session prefixes MUST NOT leak across 
+             threads or asyncio tasks.
+        INV: Zero Side Effects: Code outside this context must remain unprefixed.
+
+        SIDE EFFECT: Modifies the current thread/task ContextVar state.
         """
-        # Copy current context
-        ctx = copy_context()
-
-        # Set session_id in copied context
-        def wrapper() -> Any:
-            token = self.set_session_context(session_id)
-            try:
-                return func()
-            finally:
-                self.reset_session_context(token)
-
-        # Run func with context
-        return ctx.run(wrapper)
+        if not session_id:
+            raise ValueError("session_id must be non-empty")
+        if not callable(func):
+            raise ValueError("func must be callable")
+        
+        # Set session context in ContextVar
+        token = self.set_session_context(session_id)
+        
+        # Create filter that injects session_id into all LogRecords
+        class SessionFilter(logging.Filter):
+            def filter(self, record: logging.LogRecord) -> bool:
+                # Get session_id from ContextVar and inject into record
+                current_session = _current_session_id.get(None)
+                if current_session:
+                    record.session_id = current_session
+                # Always return True to pass the record through
+                return True
+        
+        # Create formatter that adds session prefix when session_id exists
+        class SessionFormatter(logging.Formatter):
+            def __init__(self, original_formatter: logging.Formatter | None):
+                self.original_formatter = original_formatter
+                super().__init__()
+            
+            def format(self, record: logging.LogRecord) -> str:
+                # Format using original formatter or basic message
+                if self.original_formatter:
+                    formatted = self.original_formatter.format(record)
+                else:
+                    formatted = record.getMessage()
+                
+                # Prepend session prefix if session_id attribute exists
+                if hasattr(record, 'session_id') and record.session_id:
+                    return f"[Session: {record.session_id}] {formatted}"
+                else:
+                    return formatted
+        
+        # Get root logger
+        root_logger = logging.getLogger()
+        
+        # Create single filter instance to share across handlers
+        session_filter = SessionFilter()
+        
+        # Store original formatters and filters for restoration
+        original_formatters: dict[logging.Handler, logging.Formatter | None] = {}
+        handlers_with_filter: list[logging.Handler] = []
+        
+        try:
+            # Modify all handlers: add filter AND replace formatter
+            for handler in root_logger.handlers:
+                # Add filter to handler (filters on handlers apply to all records)
+                handler.addFilter(session_filter)
+                handlers_with_filter.append(handler)
+                
+                # Store and replace formatter
+                original_formatters[handler] = handler.formatter
+                handler.setFormatter(SessionFormatter(handler.formatter))
+            
+            # Execute function with session context active
+            return func()
+            
+        finally:
+            # Restore original formatters
+            for handler, original_formatter in original_formatters.items():
+                handler.setFormatter(original_formatter)
+            
+            # Remove filter from all handlers
+            for handler in handlers_with_filter:
+                handler.removeFilter(session_filter)
+            
+            # Reset ContextVar
+            self.reset_session_context(token)
 
     # =========================================================================
     # SESSION REAPER
