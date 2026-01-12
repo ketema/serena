@@ -300,8 +300,17 @@ class GlobalLanguageServerPool:
                 # Get ref_count from session_refs (read-only)
                 ref_count = len(self._session_refs.get(pool_key, set()))
 
-                # Determine status from LSP running state
-                status = "running" if lsp.is_running() else "stopped"
+                # Determine status from LSP running state and exit code
+                if lsp.is_running():
+                    status = "running"
+                else:
+                    # Not running - check if crashed or stopped cleanly
+                    process = getattr(lsp, "_process", None)
+                    returncode = getattr(process, "returncode", None) if process else None
+                    if returncode is not None and returncode != 0:
+                        status = "crashed"
+                    else:
+                        status = "stopped"
 
                 lsp_stats.append({
                     "language": language.name,

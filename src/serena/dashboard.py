@@ -152,8 +152,8 @@ class SerenaDashboardAPI:
             pool = getattr(self._agent, "_lsp_pool", None)
             if pool is not None and isinstance(pool, GlobalLanguageServerPool):
                 return pool.get_pool_stats()
-        except Exception:
-            pass
+        except Exception as e:
+            log.error(f"Failed to get LSP pool stats: {e}", exc_info=True)
         
         # No pool available or error - return empty stats
         return {"lsps": [], "total_count": 0}

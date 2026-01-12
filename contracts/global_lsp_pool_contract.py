@@ -271,7 +271,11 @@ class GlobalLanguageServerPoolContract(ABC):
             - language: str (Language enum name)
             - workspace_root: str (path or "shared" for multi-root)
             - ref_count: int (current session references)
-            - status: str ("running", "idle", "stopped")
+            - status: str ("running", "stopped", "crashed", "initializing")
+              - "running": LSP process alive and responsive (is_running() == True)
+              - "stopped": Clean shutdown (returncode == 0 or None before start)
+              - "crashed": Abnormal termination (returncode != 0 and != None)
+              - "initializing": Process started but not yet responsive
 
         INVARIANT: This method is read-only - does not modify ref_count or pool state.
         Thread-safety: Acquires pool_lock (read).
