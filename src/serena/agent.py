@@ -837,6 +837,42 @@ class SerenaAgent:
         # POST: Bind session to project workspace (use positional args for test)
         self._session_registry.bind_session(session_id, workspace_root, "explicit")
 
+    def activate_project(self, project_name: str) -> None:
+        """
+        Legacy API: Activate project (delegates to session-aware method when session exists).
+
+        PRE: project_name exists in config.
+        POST: Delegates to activate_session_project() when session context exists.
+        POST: Legacy behavior preserved when no session context (sets _active_project only).
+        INV: No cross-session side effects.
+        ERRORS: ProjectNotFoundError for unknown project.
+        """
+        # PRE: Validate project exists
+        project = self.serena_config.get_project(project_name)
+        if project is None:
+            raise ProjectNotFoundError(
+                f"Project '{project_name}' not found: Not a valid project name. "
+                f"Existing project names: {self.serena_config.project_names}"
+            )
+
+        # POST: If session context exists, delegate to session-aware method
+        session_id: str | None = None
+        if hasattr(self._current_session_id, "get"):
+            # Test path: ContextVar
+            session_id = self._current_session_id.get()  # type: ignore[union-attr]
+        elif self._session_bridge is not None:
+            # Production path: session bridge
+            session_id = self._session_bridge.get_current_session_id()
+        else:
+            session_id = self._current_session_id
+
+        if session_id is not None:
+            # POST: Session context exists → delegate to session-aware method
+            self.activate_session_project(project_name)
+        else:
+            # POST: No session context → legacy behavior (set _active_project only)
+            self._active_project = project
+
         # POST: Legacy state UNTOUCHED (REQ-STATELESS)
         # INV: No mutation of self._active_project
 
