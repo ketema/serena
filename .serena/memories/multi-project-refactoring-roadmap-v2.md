@@ -1,11 +1,11 @@
-# Multi-Project Refactoring Roadmap (v2)
+# Multi-Project Refactoring Roadmap (v2.1)
 
 **Date**: 2026-01-12
 **Status**: DEFINITIVE GUIDE
 **Supersedes**: 
-- `multi-project-implementation-plan-v1.md` (Integration section)
-- `option-c-sync-refactor-plan.md` (Integration section)
-- `multi-project-integration-complete.md` (Invalidated - claims rejected)
+- `multi-project-refactoring-roadmap-v2.md`
+- `multi-project-implementation-plan-v1.md`
+- `option-c-sync-refactor-plan.md`
 
 ## Executive Summary
 
@@ -27,18 +27,32 @@ This roadmap defines the **mandatory refactoring phases** required to bridge the
 - `SerenaAgent` receives references to these registries via dependency injection (constructor) as **OPTIONAL** parameters.
 - Existing behavior continues to work (parallel operation).
 
+### REQ-DCL-FIX: Safe Singleton Access (NEW)
+**WHAT**: Replace Double-Checked Locking in `mcp.py` with simple lock-guarded lazy initialization or module-level initialization.
+**WHY**: DCL is potentially unsafe in Python. Return singletons INSIDE the lock.
+**EXPECTED**: Thread-safe initialization without race conditions.
+
 ### REQ-7: Replace Naive _create_lsp Implementation (REVISED)
 **WHAT**: Replace the naive, hardcoded `_create_lsp` implementation in `GlobalLanguageServerPool` with robust `LanguageServerFactory` logic.
 **WHY**: Current implementation ignores user configuration (ignored_patterns, encoding, ls_specific_settings, ls_timeout) and crashes in tests (11 failures).
 **EXPECTED**: 
 - The pool correctly instantiates `SolidLanguageServer` with configuration derived from the target `Project`.
 - User's `project.yml` settings are respected.
+- **REQ-ERR-1**: No silent exception swallowing. Configuration errors must be audible.
+
+### REQ-SEC-5: Secure Launch Arguments (NEW)
+**WHAT**: Implement "Defense in Depth" for `ClangdAdapter.get_launch_arguments`.
+**WHY**: Prevent path traversal attacks via malicious `session_id`.
+**EXPECTED**:
+- Validation (alphanumeric).
+- Hashing (SHA-256).
+- Verification (`.resolve()` check against base directory).
 
 ---
 
-## Phase 2: The New Path
+## Phase 2: The New Path & Observability
 
-**Goal**: Implement new methods that use the Registry, alongside existing methods.
+**Goal**: Implement new methods that use the Registry, and make them observable.
 
 ### REQ-4: Implement Session-Aware Activation
 **WHAT**: Create NEW method `SerenaAgent.activate_session_project()` that uses `SessionRegistry.bind_session`.
@@ -59,6 +73,14 @@ This roadmap defines the **mandatory refactoring phases** required to bridge the
     4. Executes the request.
     5. Releases the LSP reference (start idle timer).
 - Old path continues to work for backward compatibility.
+
+### REQ-LOG: Structured Session Logging (NEW)
+**WHAT**: Update `MemoryLogHandler` or call sites to include `[Session: <id>]` prefix.
+**WHY**: Debugging concurrent sessions is impossible without context.
+
+### REQ-API: Observability Endpoints (NEW)
+**WHAT**: Add `/get_session_overview` and `/get_lsp_pool_stats` to `dashboard.py`.
+**WHY**: Verify Phase 2 logic via the Dashboard (UI-1, UI-2).
 
 ---
 
@@ -119,8 +141,8 @@ This roadmap defines the **mandatory refactoring phases** required to bridge the
 
 ## Critical Checkpoints (Strangler Fig Ordering)
 
-1. **Phase 1 Gate**: New components initialized in parallel. Existing tests still pass.
-2. **Phase 2 Gate**: New methods work. Old methods still work. Both paths coexist.
+1. **Phase 1 Gate**: New components initialized in parallel. Existing tests pass. **Security & Thread-safety Verified.**
+2. **Phase 2 Gate**: New methods work. Old methods still work. Both paths coexist. **Observability Active.**
 3. **Phase 3 Gate**: mcp.py uses new path. Integration tests pass (Client A + Client B concurrent).
 4. **Phase 4 Gate**: Legacy code removed. Only new path exists. All tests pass.
 
