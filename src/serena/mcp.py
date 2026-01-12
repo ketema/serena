@@ -3,6 +3,7 @@ The Serena Model Context Protocol (MCP) Server
 """
 
 import sys
+import threading
 from collections.abc import AsyncIterator, Iterator, Sequence
 from contextlib import asynccontextmanager
 from copy import deepcopy
@@ -24,6 +25,9 @@ from serena.agent import (
 from serena.config.context_mode import SerenaAgentContext, SerenaAgentMode
 from serena.config.serena_config import LanguageBackend
 from serena.constants import DEFAULT_CONTEXT, DEFAULT_MODES, SERENA_LOG_FORMAT
+from serena.global_lsp_pool import GlobalLanguageServerPool
+from serena.mcp_session_bridge import MCPSessionBridge
+from serena.session_registry import SessionRegistry
 from serena.tools import Tool
 from serena.util.exception import show_fatal_exception_safe
 from serena.util.logging import MemoryLogHandler
@@ -64,6 +68,12 @@ class SerenaMCPFactory:
         self.project = project
         self.agent: SerenaAgent | None = None
         self.memory_log_handler = memory_log_handler
+
+        # Singleton instances for global services
+        self._session_registry: SessionRegistry | None = None
+        self._session_bridge: MCPSessionBridge | None = None
+        self._lsp_pool: GlobalLanguageServerPool | None = None
+        self._lock = threading.RLock()
 
     @staticmethod
     def _sanitize_for_openai_tools(schema: dict) -> dict:
@@ -328,3 +338,57 @@ class SerenaMCPFactory:
     def _get_initial_instructions(self) -> str:
         assert self.agent is not None
         return self.agent.create_system_prompt()
+
+    def get_session_registry(self) -> SessionRegistry:
+        """
+        Get or create the SessionRegistry singleton.
+        Thread-safe lazy initialization ensures only one instance is created.
+
+        :return: The SessionRegistry singleton instance
+        """
+        if self._session_registry is None:
+            with self._lock:
+                # Double-check pattern to prevent race conditions
+                if self._session_registry is None:
+                    self._session_registry = SessionRegistry()
+        return self._session_registry
+
+    def get_session_bridge(self) -> MCPSessionBridge:
+        """
+        Get or create the MCPSessionBridge singleton.
+        Thread-safe lazy initialization ensures only one instance is created.
+        Depends on SessionRegistry being initialized first.
+
+        :return: The MCPSessionBridge singleton instance
+        """
+        if self._session_bridge is None:
+            with self._lock:
+                # Double-check pattern to prevent race conditions
+                if self._session_bridge is None:
+                    session_registry = self.get_session_registry()
+                    self._session_bridge = MCPSessionBridge(session_registry)
+        return self._session_bridge
+
+    def get_lsp_pool(self) -> GlobalLanguageServerPool:
+        """
+        Get or create the GlobalLanguageServerPool singleton.
+        Thread-safe lazy initialization ensures only one instance is created.
+
+        :return: The GlobalLanguageServerPool singleton instance
+        """
+        if self._lsp_pool is None:
+            with self._lock:
+                # Double-check pattern to prevent race conditions
+                if self._lsp_pool is None:
+                    self._lsp_pool = GlobalLanguageServerPool()
+        return self._lsp_pool
+
+    def shutdown(self) -> None:
+        """
+        Clear all singleton instances to allow clean shutdown.
+        This is useful for testing or when recreating the factory.
+        """
+        with self._lock:
+            self._session_registry = None
+            self._session_bridge = None
+            self._lsp_pool = None
