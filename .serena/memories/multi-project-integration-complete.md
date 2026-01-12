@@ -1,3 +1,35 @@
+# ⚠️ INVALIDATED DOCUMENT - POTEMKIN VILLAGE INTEGRATION ⚠️
+
+**Status**: SUPERSEDED - Do not use as implementation reference
+**Superseded By**: `.serena/memories/multi-project-refactoring-roadmap-v2.md`
+**Invalidation Date**: 2026-01-12
+**Reason**: Claims below are factually incorrect (verified via adversarial audit)
+
+## Why This Document Was Rejected
+
+### False Claim #1: "Successfully integrated SessionRegistry → SerenaAgent"
+**The Text**: "_activate_project() ... Unbinds old session (if exists), creates new session_id"
+**Reality**: The unbind logic **DESTROYS** multi-project capability. By unbinding the previous session, this implements "Session Switching" (single-project), NOT "Session Isolation" (multi-project).
+**Evidence**: `src/serena/agent.py:420` - `unbind_session` on activation
+
+### False Claim #2: "52 tests passing"
+**The Text**: "Total: 52 tests passing"
+**Reality**: These were **unit tests against mocks**. The key integration test (`test_global_lsp_pool.py`) failed **11/15 times** with `LanguageServerTerminatedException`. The "52 passing" masked broken integration.
+**Evidence**: `pytest test/serena/test_global_lsp_pool.py` → 11 failures
+
+### False Claim #3: "Option C: Full Sync Refactor"
+**The Text**: "All components use threading.Lock instead of asyncio.Lock"
+**Reality**: `MCPSessionBridge` still uses `asyncio.create_task` for the reaper (`mcp_session_bridge.py:245`). This is a **hybrid mess**, not "Full Sync".
+
+## Anti-Pattern: "Potemkin Village Integration"
+- **Symptom**: High unit test coverage, integration tests missing/broken
+- **Mechanism**: Mocks pass, real components fail
+- **Detection**: Run actual integration stack, not just mocked units
+
+---
+
+# [HISTORICAL - DO NOT IMPLEMENT]
+
 # Multi-Project Session Isolation - Integration Complete
 
 **Date**: 2026-01-11

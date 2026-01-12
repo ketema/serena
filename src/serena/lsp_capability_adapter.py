@@ -53,6 +53,24 @@ class MultiRootSupport:
 
 
 # =============================================================================
+# POOLING POLICY LEVELS
+# =============================================================================
+
+
+class PoolingPolicy:
+    """
+    Enum-like class for LSP process pooling strategies.
+
+    Determines how LSP processes are allocated and shared across workspace roots.
+    """
+
+    SHARED_INSTANCE = "shared_instance"  # Single process for all roots (multi-root LSPs)
+    ISOLATED_PROCESS = "isolated_process"  # Separate process per root (single-root LSPs)
+    ISOLATED_WITH_RESOURCE_MANAGEMENT = "isolated_with_resource_management"  # Isolated + monitoring
+    FORCED_ISOLATION = "forced_isolation"  # Never pool, even if multi-root capable
+
+
+# =============================================================================
 # ABSTRACT BASE ADAPTER
 # =============================================================================
 
@@ -112,6 +130,26 @@ class LSPCapabilityAdapterContract(ABC):
         ...
 
     @abstractmethod
+    def get_pooling_policy(self) -> str:
+        """Return the pooling policy for this LSP."""
+        ...
+
+    @abstractmethod
+    def get_launch_arguments(
+        self,
+        workspace_root: Path,
+        session_id: str,
+    ) -> list[str]:
+        """
+        Return LSP-specific launch arguments.
+
+        PRE: workspace_root is absolute path to project root
+        PRE: session_id is unique identifier for this session
+        POST: Returns list of command-line arguments
+        """
+        ...
+
+    @abstractmethod
     def detect_capabilities(
         self,
         ls: "SolidLanguageServer",
@@ -138,6 +176,22 @@ class BaseMultiRootAdapter(LSPCapabilityAdapterContract):
     @property
     def multi_root_support(self) -> str:
         return MultiRootSupport.FULL
+
+    def get_pooling_policy(self) -> str:
+        """Multi-root LSPs use SHARED_INSTANCE pooling."""
+        return PoolingPolicy.SHARED_INSTANCE
+
+    def get_launch_arguments(
+        self,
+        workspace_root: Path,
+        session_id: str,
+    ) -> list[str]:
+        """
+        Return default launch arguments for multi-root LSPs.
+
+        Base implementation returns empty list - subclasses override if needed.
+        """
+        return []
 
     def can_serve_path(
         self,
@@ -219,9 +273,9 @@ class BaseMultiRootAdapter(LSPCapabilityAdapterContract):
         workspace_folders = workspace.get("workspaceFolders", {})
 
         return {
-            "workspace.workspaceFolders": workspace_folders.get("supported", False)
-            if isinstance(workspace_folders, dict)
-            else bool(workspace_folders),
+            "workspace.workspaceFolders": (
+                workspace_folders.get("supported", False) if isinstance(workspace_folders, dict) else bool(workspace_folders)
+            ),
         }
 
 
@@ -242,6 +296,22 @@ class BaseSingleRootAdapter(LSPCapabilityAdapterContract):
     @property
     def multi_root_support(self) -> str:
         return MultiRootSupport.NONE
+
+    def get_pooling_policy(self) -> str:
+        """Single-root LSPs use ISOLATED_PROCESS pooling."""
+        return PoolingPolicy.ISOLATED_PROCESS
+
+    def get_launch_arguments(
+        self,
+        workspace_root: Path,
+        session_id: str,
+    ) -> list[str]:
+        """
+        Return default launch arguments for single-root LSPs.
+
+        Base implementation returns empty list - subclasses override if needed.
+        """
+        return []
 
     def can_serve_path(
         self,
