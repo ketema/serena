@@ -114,10 +114,10 @@ class SessionRegistryContract:
         """
         ...
 
-    def get_session_overview(self) -> dict:
+    def get_session_overview(self) -> dict[str, Any]:
         """
         Get overview of all active sessions for observability.
-        
+
         PRE: none
         POST: Returns dict with keys:
             - "sessions": list of session detail dicts
@@ -129,7 +129,7 @@ class SessionRegistryContract:
             - connected_at: str (ISO 8601 format)
             - activation_source: str ("explicit" or "auto")
         POST: len(sessions) == total_count
-        
+
         Thread-safety: Safe to call concurrently.
         """
         ...

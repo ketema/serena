@@ -8,10 +8,10 @@ release LSP after execution, and handle errors deterministically.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-import time
 from unittest.mock import Mock
 
 import pytest

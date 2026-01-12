@@ -127,11 +127,14 @@ wheels = [
 
 [[package]]
 name = "asttokens"
-version = "3.0.0"
+version = "2.4.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4a/e7/82da0a03e7ba5141f05cce0d302e6eed121ae055e0456ca228bf693984bc/asttokens-3.0.0.tar.gz", hash = "sha256:0dcd8baa8d62b0c1d118b399b2ddba3c4aff271d0d7a9e0d4c1681c79035bbc7", size = 61978, upload-time = "2024-11-30T04:30:14.439Z" }
+dependencies = [
+    { name = "six" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/45/1d/f03bcb60c4a3212e15f99a56085d93093a497718adf828d050b9d675da81/asttokens-2.4.1.tar.gz", hash = "sha256:b03869718ba9a6eb027e134bfdf69f38a236d681c83c160d510768af11254ba0", size = 62284, upload-time = "2023-10-26T10:03:05.06Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/25/8a/c46dcc25341b5bce5472c718902eb3d38600a903b14fa6aeecef3f21a46f/asttokens-3.0.0-py3-none-any.whl", hash = "sha256:e3078351a059199dd5138cb1c706e6430c05eff2ff136af5eb4790f9d28932e2", size = 26918, upload-time = "2024-11-30T04:30:10.946Z" },
+    { url = "https://files.pythonhosted.org/packages/45/86/4736ac618d82a20d87d2f92ae19441ebc7ac9e7a581d7e58bbe79233b24a/asttokens-2.4.1-py2.py3-none-any.whl", hash = "sha256:051ed49c3dcae8913ea7cd08e46a606dba30b79993209636c4875bc1d637bc24", size = 27764, upload-time = "2023-10-26T10:03:01.789Z" },
 ]
 
 [[package]]
@@ -704,6 +707,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/6e/fa/66bd985dd0b7c109a3bcb89272ee0bfb7e2b4d06309ad7b38ff866734b2a/httpx_sse-0.4.1.tar.gz", hash = "sha256:8f44d34414bc7b21bf3602713005c5df4917884f76072479b21f68befa4ea26e", size = 12998, upload-time = "2025-06-24T13:21:05.71Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/25/0a/6269e3473b09aed2dab8aa1a600c70f31f00ae1349bee30658f7e358a159/httpx_sse-0.4.1-py3-none-any.whl", hash = "sha256:cba42174344c3a5b06f255ce65b350880f962d99ead85e776f23c6618a377a37", size = 8054, upload-time = "2025-06-24T13:21:04.772Z" },
+]
+
+[[package]]
+name = "icontract"
+version = "2.7.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "asttokens" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0e/ac/340fcc96909bc140fd84c05c1c7e5eb5d311111d18da8708b9f86e2dcec4/icontract-2.7.2.tar.gz", hash = "sha256:281ec16f1d09bbcca7a4227e82cd10b4d5fb291f638df77c29b7acf493dd3178", size = 67442, upload-time = "2025-11-08T09:35:06.929Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/11/94cfede21fa15f493ae423887c3bb5c7a1c19b4ec00e39473b181211d649/icontract-2.7.2-py3-none-any.whl", hash = "sha256:2eb86290ef1d2d8c7af157361d419f178b3eb5b4c72a292c5722fa6fd40a1e0a", size = 40794, upload-time = "2025-11-08T09:35:05.63Z" },
 ]
 
 [[package]]
@@ -1949,6 +1965,7 @@ dependencies = [
     { name = "dotenv" },
     { name = "flask" },
     { name = "fortls" },
+    { name = "icontract" },
     { name = "jinja2" },
     { name = "joblib" },
     { name = "mcp" },
@@ -2008,6 +2025,7 @@ requires-dist = [
     { name = "fortls", specifier = ">=3.2.2" },
     { name = "freezegun", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "google-genai", marker = "extra == 'google'", specifier = ">=1.8.0" },
+    { name = "icontract", specifier = ">=2.7.2" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "jinja2", marker = "extra == 'dev'" },
     { name = "joblib", specifier = ">=1.5.1" },
