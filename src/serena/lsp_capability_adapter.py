@@ -472,6 +472,29 @@ class ClangdAdapter(BaseSingleRootAdapter):
     def language(self) -> Language:
         return Language.CPP
 
+    def get_launch_arguments(
+        self,
+        workspace_root: Path,
+        session_id: str,
+    ) -> list[str]:
+        """
+        Return clangd-specific launch arguments with session-isolated cache path.
+
+        Cache path format: /tmp/serena_clangd_{session_id}_{workspace_hash}
+        - session_id: Ensures different sessions use different caches
+        - workspace_hash: Ensures different projects use different caches
+        - Deterministic: Same inputs always produce same path
+        """
+        import hashlib
+
+        # Create deterministic hash of workspace_root
+        workspace_hash = hashlib.sha256(str(workspace_root).encode()).hexdigest()[:8]
+
+        # Construct session-isolated cache path
+        cache_path = f"/tmp/serena_clangd_{session_id}_{workspace_hash}"
+
+        return [f"--cache-path={cache_path}"]
+
 
 class DefaultAdapter(BaseSingleRootAdapter):
     """
