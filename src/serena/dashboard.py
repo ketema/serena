@@ -4,13 +4,14 @@ import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Self
 
-from flask import Flask, Response, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 from pydantic import BaseModel
 from sensai.util import logging
 
 from serena.analytics import ToolUsageStats
 from serena.config.serena_config import LanguageBackend
 from serena.constants import SERENA_DASHBOARD_DIR
+from serena.global_lsp_pool import GlobalLanguageServerPool
 from serena.task_executor import TaskExecutor
 from serena.util.logging import MemoryLogHandler
 
@@ -139,6 +140,23 @@ class SerenaDashboardAPI:
     @property
     def memory_log_handler(self) -> MemoryLogHandler:
         return self._memory_log_handler
+
+    def _get_session_overview(self) -> dict[str, Any]:
+        """Get session overview from session registry."""
+        return self._agent.session_registry.get_session_overview()
+
+    def _get_lsp_pool_stats(self) -> dict[str, Any]:
+        """Get LSP pool statistics."""
+        # Check if pool is available via agent
+        try:
+            pool = getattr(self._agent, "_lsp_pool", None)
+            if pool is not None and isinstance(pool, GlobalLanguageServerPool):
+                return pool.get_pool_stats()
+        except Exception:
+            pass
+        
+        # No pool available or error - return empty stats
+        return {"lsps": [], "total_count": 0}
 
     def _setup_routes(self) -> None:
         # Static files
@@ -307,6 +325,16 @@ class SerenaDashboardAPI:
                 }
             except Exception as e:
                 return {"status": "error", "message": str(e), "was_cancelled": False}
+
+        @self._app.route("/get_session_overview", methods=["GET"])
+        def get_session_overview() -> dict[str, Any]:
+            result = self._get_session_overview()
+            return jsonify(result)
+
+        @self._app.route("/get_lsp_pool_stats", methods=["GET"])
+        def get_lsp_pool_stats() -> dict[str, Any]:
+            result = self._get_lsp_pool_stats()
+            return jsonify(result)
 
         @self._app.route("/last_execution", methods=["GET"])
         def get_last_execution() -> dict[str, Any]:
