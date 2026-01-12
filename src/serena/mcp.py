@@ -260,9 +260,20 @@ class SerenaMCPFactory:
             log.info(f"Starting MCP server with {len(mcp._tool_manager._tools)} tools: {list(mcp._tool_manager._tools.keys())}")
 
     def _create_serena_agent(self, serena_config: SerenaConfig, modes: list[SerenaAgentMode]) -> SerenaAgent:
-        return SerenaAgent(
+        agent = SerenaAgent(
             project=self.project, serena_config=serena_config, context=self.context, modes=modes, memory_log_handler=self.memory_log_handler
         )
+        
+        # Store agent reference and config for later use
+        self.agent = agent
+        self._serena_config = serena_config
+        
+        # REQ-4b: Bind session for MCP clients after agent creation
+        if self.project is not None and hasattr(agent, '_current_session_id') and agent._current_session_id is not None:
+            # Call factory's activation method to bind session
+            self.activate_project_for_mcp_session(self.project)
+        
+        return agent
 
     def _create_default_serena_config(self) -> SerenaConfig:
         return SerenaConfig.from_config_file()
@@ -347,8 +358,69 @@ class SerenaMCPFactory:
         
         openai_tool_compatible = self.context.name in ["chatgpt", "codex", "oaicompat-agent"]
         self._set_mcp_tools(mcp_server, openai_tool_compatible=openai_tool_compatible)
+        
+        # REQ-4b: Activate session project after agent creation
+        if self.project is not None and self.agent is not None:
+            self.activate_project_for_mcp_session(self.project)
+        
         log.info("MCP server lifetime setup complete")
         yield
+
+    def activate_project_for_mcp_session(self, project_name: str) -> None:
+        """
+        Activate a project for the current MCP session.
+        
+        REQ-4b: Use activate_session_project() instead of activate_project() for MCP clients.
+        This method binds the session to the project workspace without triggering legacy activation.
+        
+        PRE: self.agent is not None
+        PRE: project_name is valid project name or path
+        
+        POST: Session bound to project workspace via SessionRegistry
+        POST: SessionRegistry.get_session(session_id) returns SessionContext
+        
+        :param project_name: The name or path of the project to activate for this session
+        """
+        if self.agent is None:
+            raise ValueError("Cannot activate session project: agent not initialized")
+        
+        # Get session ID from agent
+        session_id = self.agent._current_session_id
+        if session_id is None:
+            raise ValueError("Cannot activate session project: no session ID on agent")
+        
+        # Get project from config (use stored config from agent creation)
+        config = self._serena_config if hasattr(self, '_serena_config') else self.agent.serena_config
+        from serena.agent import ProjectNotFoundError
+        project = config.get_project(project_name)
+        if project is None:
+            raise ProjectNotFoundError(
+                f"Project '{project_name}' not found: Not a valid project name."
+            )
+        
+        # Get workspace root
+        from pathlib import Path
+        workspace_root = Path(project.project_root)
+        
+        # Bind session directly via registry
+        # Access registry through agent or factory
+        if hasattr(self.agent, '_session_registry'):
+            registry = self.agent._session_registry
+        else:
+            registry = self.get_session_registry()
+        
+        # Check if already bound to same workspace (idempotent)
+        existing_session = registry.get_session(session_id)
+        if existing_session is not None:
+            if Path(existing_session.workspace_root).resolve() == workspace_root.resolve():
+                # Already bound to same workspace → no-op
+                return
+            else:
+                # Bound to different workspace → unbind old first
+                registry.unbind_session(session_id)
+        
+        # Bind session to project workspace
+        registry.bind_session(session_id, workspace_root, "explicit")
 
     def _get_initial_instructions(self) -> str:
         assert self.agent is not None
