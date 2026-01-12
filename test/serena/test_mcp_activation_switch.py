@@ -1,20 +1,24 @@
 """
-Cycle 3.1 RED: MCP Activation Switch Tests (REQ-4b)
+Cycle 3.1: MCP Activation Switch Tests (REQ-4b)
 
-Contract: SerenaMCPFactory activation MUST use activate_session_project()
-Enforces: MCP clients use session-aware activation path
+Contract Reference: contracts/issue6_multi_project_contract.py
 
-REQ-4b: mcp.py uses activate_session_project() for MCP clients instead of activate_project()
+Tests trace to MCPFactoryActivationContract:
+- PRE: agent is not None
+- PRE: session_id is not None (session context exists)
+- PRE: project_name is a string that exists in config OR valid path
+- POST: SessionRegistry.bind_session(session_id, workspace_root) called
+- POST: SessionRegistry.get_session(session_id) returns SessionContext
+- POST: SessionContext.workspace_root == project.project_root.resolve()
+- INV: Only one workspace bound per session at a time
+- INV: Binding to same workspace is idempotent (no-op)
+- INV: Binding to different workspace unbinds previous first
+- INV: Other sessions unaffected by this activation
 
-Theater Prevention:
-- Assertions verify registry state after MCP lifecycle, not just method existence
-- Tests go through MCP factory pathway, not direct agent method calls
-- Real errors (ValueError) for missing session context in MCP path
-
-Test Philosophy:
-- Tests are BLIND to implementation - they specify WHAT should happen
-- GREEN phase coder implements HOW to make tests pass
-- Observable effects: SessionRegistry state, error messages
+Theater Prevention (from CLAUDE.md):
+- Assertions verify ACTUAL registry state, NOT mock call counts
+- Tests verify observable POST conditions, NOT implementation details
+- Error messages describe WHAT behavior is expected, NOT HOW to implement
 """
 
 import logging
@@ -30,7 +34,11 @@ from serena.session_registry import SessionRegistry
 
 @pytest.fixture
 def mock_serena_config(tmp_path: Path):
-    """Mock SerenaConfig following established pattern."""
+    """
+    Mock SerenaConfig following established pattern.
+
+    Contract: PRE for activate_project_for_mcp_session requires project in config
+    """
     config = MagicMock()
 
     # Mock config attributes needed by SerenaAgent.__init__
@@ -65,189 +73,370 @@ def mock_serena_config(tmp_path: Path):
     return config, workspace
 
 
-class TestMCPActivationSwitch:
+class TestMCPFactoryActivationContract:
     """
+    Tests for MCPFactoryActivationContract.
+
+    Contract Reference: contracts/issue6_multi_project_contract.py::MCPFactoryActivationContract
     REQ-4b: mcp.py uses activate_session_project() for MCP clients
-
-    These tests verify the MCP PATHWAY calls activate_session_project(),
-    not just that the method works (that's Phase 2).
     """
 
-    def test_mcp_factory_binds_session_on_agent_creation(self, mock_serena_config):
+    def test_post_get_session_returns_context_after_activation(self, mock_serena_config):
         """
-        Contract: SerenaMCPFactory with project and session binds to registry
-        Enforces: POST: After agent created with session context, registry has binding
+        Contract: MCPFactoryActivationContract
+        Enforces: POST: SessionRegistry.get_session(session_id) returns SessionContext
 
-        Given: SerenaMCPFactory created with project AND session context
-        When: SerenaAgent is created through factory
-        Then: SessionRegistry.get_session(session_id) returns bound session
-
-        Theater Check: Verify ACTUAL registry state after agent creation,
-        NOT via mocked call counts
+        Theater Prevention:
+        - Verifies ACTUAL registry state via get_session(), NOT mock.called
+        - Cannot pass if bind_session() didn't actually update registry
         """
         config, workspace_path = mock_serena_config
-
-        # Create shared registry
         registry = SessionRegistry()
-        session_id = "mcp-client-session-123"
+        session_id = "mcp-session-post-test"
 
-        # Create MCP factory with project
         factory = SerenaMCPFactory(project="test_project")
 
-        # Patch config loading and agent creation to use our mocks
         with (
             patch.object(factory, "_create_default_serena_config", return_value=config),
-            patch(
-                "serena.mcp.SerenaAgent",
-                autospec=True,
-            ) as MockAgent,
+            patch("serena.mcp.SerenaAgent", autospec=True) as MockAgent,
         ):
-            # Configure mock agent
             mock_agent = MagicMock()
             mock_agent._session_registry = registry
             mock_agent._current_session_id = session_id
+            mock_agent.serena_config = config
             MockAgent.return_value = mock_agent
 
-            # Create agent through factory
-            modes = []
-            agent = factory._create_serena_agent(config, modes)
+            factory._create_serena_agent(config, [])
+            factory.agent = mock_agent
+            factory._serena_config = config
 
-            # Factory should call activate_session_project on the agent
-            # This is what REQ-4b requires
-            factory.agent = agent
+            # ACT: Activate project for MCP session
+            factory.activate_project_for_mcp_session("test_project")
 
-            # ACT: Factory should bind session after agent creation
-            # Implementation: factory.activate_project_for_mcp_session(session_id)
-            # or similar mechanism during startup
-
-        # ASSERT: Registry should contain session binding
-        # This will FAIL until implementation adds binding logic
+        # POST ASSERTION: get_session(session_id) returns SessionContext
         session_ctx = registry.get_session(session_id)
 
         assert session_ctx is not None, (
-            "\n=== FAILURE: test_mcp_factory_binds_session_on_agent_creation ===\n"
-            "WHAT FAILED: SessionRegistry.get_session(session_id) returned None\n"
-            "WHY: REQ-4b requires MCP factory to bind session via activate_session_project()\n"
-            f"EXPECTED: Session '{session_id}' bound to workspace {workspace_path}\n"
-            "ACTUAL: No session binding found in registry\n"
-            "BEHAVIORAL GUIDANCE:\n"
-            "  - SerenaMCPFactory MUST call agent.activate_session_project() during startup\n"
-            "  - Session binding MUST occur after agent creation with session context\n"
-            "  - Registry binding MUST be observable via get_session(session_id)\n"
-            "  Observable effects:\n"
-            "    - SessionRegistry.get_session(session_id) returns SessionContext\n"
-            "    - SessionContext.workspace_root == project.project_root\n"
-            "  Implementation options:\n"
-            "    - Add activate_project_for_mcp_session() to SerenaMCPFactory\n"
-            "    - Call during server_lifespan or on first tool call\n"
-            "    - Set agent._current_session_id before calling activate_session_project()\n"
+            "POST violation: SessionRegistry.get_session(session_id) returned None\n"
+            "Contract: MCPFactoryActivationContract POST\n"
+            f"EXPECTED: SessionContext for session_id='{session_id}'\n"
+            "ACTUAL: None returned\n"
+            "Guidance: bind_session() MUST update registry so get_session() returns context"
         )
 
-    def test_mcp_session_registry_accessible_via_factory(self, mock_serena_config):
+    def test_post_workspace_root_matches_project_root(self, mock_serena_config):
         """
-        Contract: SerenaMCPFactory exposes session registry for verification
-        Enforces: POST: get_session_registry() returns the shared registry
+        Contract: MCPFactoryActivationContract
+        Enforces: POST: SessionContext.workspace_root == project.project_root.resolve()
 
-        Given: SerenaMCPFactory instance
-        When: get_session_registry() called
-        Then: Returns SessionRegistry instance used for session binding
+        Theater Prevention:
+        - Verifies EXACT workspace_root value, NOT just "something was set"
+        - Cannot pass if wrong workspace bound
+        """
+        config, workspace_path = mock_serena_config
+        registry = SessionRegistry()
+        session_id = "mcp-session-workspace-test"
 
-        Theater Check: Verify real registry instance is returned (already implemented in Phase 2)
+        factory = SerenaMCPFactory(project="test_project")
+
+        with (
+            patch.object(factory, "_create_default_serena_config", return_value=config),
+            patch("serena.mcp.SerenaAgent", autospec=True) as MockAgent,
+        ):
+            mock_agent = MagicMock()
+            mock_agent._session_registry = registry
+            mock_agent._current_session_id = session_id
+            mock_agent.serena_config = config
+            MockAgent.return_value = mock_agent
+
+            factory._create_serena_agent(config, [])
+            factory.agent = mock_agent
+            factory._serena_config = config
+
+            factory.activate_project_for_mcp_session("test_project")
+
+        session_ctx = registry.get_session(session_id)
+        expected_workspace = workspace_path.resolve()
+        actual_workspace = Path(session_ctx.workspace_root).resolve()
+
+        assert actual_workspace == expected_workspace, (
+            "POST violation: workspace_root != project.project_root.resolve()\n"
+            "Contract: MCPFactoryActivationContract POST\n"
+            f"EXPECTED: {expected_workspace}\n"
+            f"ACTUAL: {actual_workspace}\n"
+            "Guidance: workspace_root MUST be resolved project.project_root"
+        )
+
+    def test_pre_agent_none_raises_valueerror(self):
+        """
+        Contract: MCPFactoryActivationContract
+        Enforces: PRE: self.agent is not None
+        ERRORS: ValueError if agent is None
+
+        Theater Prevention:
+        - Cannot pass if PRE validation skipped
+        - Verifies exact error type and message
+        """
+        factory = SerenaMCPFactory(project="test_project")
+        factory.agent = None  # Explicitly violate PRE
+
+        with pytest.raises(ValueError) as exc_info:
+            factory.activate_project_for_mcp_session("test_project")
+
+        assert "agent" in str(exc_info.value).lower(), (
+            "ERRORS violation: ValueError message should mention 'agent'\n"
+            "Contract: MCPFactoryActivationContract ERRORS\n"
+            f"EXPECTED: Message containing 'agent'\n"
+            f"ACTUAL: '{exc_info.value}'\n"
+            "Guidance: Error message MUST indicate agent was None"
+        )
+
+    def test_pre_session_id_none_raises_valueerror(self, mock_serena_config):
+        """
+        Contract: MCPFactoryActivationContract
+        Enforces: PRE: self.agent._current_session_id is not None
+        ERRORS: ValueError if session_id is None
+
+        Theater Prevention:
+        - Cannot pass if session_id validation skipped
+        - Verifies exact error type
+        """
+        config, _ = mock_serena_config
+        factory = SerenaMCPFactory(project="test_project")
+
+        mock_agent = MagicMock()
+        mock_agent._current_session_id = None  # Explicitly violate PRE
+        mock_agent.serena_config = config
+        factory.agent = mock_agent
+        factory._serena_config = config
+
+        with pytest.raises(ValueError) as exc_info:
+            factory.activate_project_for_mcp_session("test_project")
+
+        assert "session" in str(exc_info.value).lower(), (
+            "ERRORS violation: ValueError message should mention 'session'\n"
+            "Contract: MCPFactoryActivationContract ERRORS\n"
+            f"EXPECTED: Message containing 'session'\n"
+            f"ACTUAL: '{exc_info.value}'\n"
+            "Guidance: Error message MUST indicate session_id was None"
+        )
+
+    def test_pre_invalid_project_raises_projectnotfounderror(self, mock_serena_config):
+        """
+        Contract: MCPFactoryActivationContract
+        Enforces: PRE: project_name exists in config
+        ERRORS: ProjectNotFoundError if project_name not in config
+
+        Theater Prevention:
+        - Verifies exact exception type
+        - Cannot pass if project validation skipped
+        """
+        from serena.agent import ProjectNotFoundError
+
+        config, _ = mock_serena_config
+        registry = SessionRegistry()
+        factory = SerenaMCPFactory(project="test_project")
+
+        mock_agent = MagicMock()
+        mock_agent._session_registry = registry
+        mock_agent._current_session_id = "valid-session"
+        mock_agent.serena_config = config
+        factory.agent = mock_agent
+        factory._serena_config = config
+
+        with pytest.raises(ProjectNotFoundError) as exc_info:
+            factory.activate_project_for_mcp_session("nonexistent_project")
+
+        assert "nonexistent_project" in str(exc_info.value), (
+            "ERRORS violation: ProjectNotFoundError should contain project name\n"
+            "Contract: MCPFactoryActivationContract ERRORS\n"
+            f"EXPECTED: Message containing 'nonexistent_project'\n"
+            f"ACTUAL: '{exc_info.value}'\n"
+            "Guidance: Error message MUST include the invalid project_name"
+        )
+
+    def test_inv_binding_same_workspace_is_idempotent(self, mock_serena_config):
+        """
+        Contract: MCPFactoryActivationContract
+        Enforces: INV: Binding to same workspace is idempotent (no-op)
+
+        Theater Prevention:
+        - Calls activation twice, verifies no side effects
+        - Verifies registry state unchanged after second call
+        """
+        config, workspace_path = mock_serena_config
+        registry = SessionRegistry()
+        session_id = "mcp-session-idempotent-test"
+
+        factory = SerenaMCPFactory(project="test_project")
+
+        with (
+            patch.object(factory, "_create_default_serena_config", return_value=config),
+            patch("serena.mcp.SerenaAgent", autospec=True) as MockAgent,
+        ):
+            mock_agent = MagicMock()
+            mock_agent._session_registry = registry
+            mock_agent._current_session_id = session_id
+            mock_agent.serena_config = config
+            MockAgent.return_value = mock_agent
+
+            factory._create_serena_agent(config, [])
+            factory.agent = mock_agent
+            factory._serena_config = config
+
+            # First activation
+            factory.activate_project_for_mcp_session("test_project")
+
+            # Capture state after first
+            session_after_first = registry.get_session(session_id)
+            workspace_after_first = session_after_first.workspace_root
+
+            # Second activation (should be no-op)
+            factory.activate_project_for_mcp_session("test_project")
+
+            # Capture state after second
+            session_after_second = registry.get_session(session_id)
+            workspace_after_second = session_after_second.workspace_root
+
+        # INV ASSERTION: State unchanged
+        assert workspace_after_first == workspace_after_second, (
+            "INV violation: Binding same workspace changed state\n"
+            "Contract: MCPFactoryActivationContract INV\n"
+            f"EXPECTED: workspace unchanged = {workspace_after_first}\n"
+            f"ACTUAL: workspace = {workspace_after_second}\n"
+            "Guidance: Second bind to same workspace MUST be idempotent no-op"
+        )
+
+    def test_inv_other_sessions_unaffected(self, mock_serena_config, tmp_path):
+        """
+        Contract: MCPFactoryActivationContract
+        Enforces: INV: Other sessions unaffected by this activation
+
+        Theater Prevention:
+        - Creates two sessions, activates project for one
+        - Verifies other session unchanged
+        """
+        config, workspace_path = mock_serena_config
+        registry = SessionRegistry()
+        session_id_1 = "session-affected"
+        session_id_2 = "session-bystander"
+
+        # Pre-bind session_2 to registry with a different workspace (must exist)
+        other_workspace = tmp_path / "other_workspace"
+        other_workspace.mkdir()
+        registry.bind_session(session_id_2, other_workspace, "explicit")
+
+        factory = SerenaMCPFactory(project="test_project")
+
+        with (
+            patch.object(factory, "_create_default_serena_config", return_value=config),
+            patch("serena.mcp.SerenaAgent", autospec=True) as MockAgent,
+        ):
+            mock_agent = MagicMock()
+            mock_agent._session_registry = registry
+            mock_agent._current_session_id = session_id_1  # Operate on session_1 only
+            mock_agent.serena_config = config
+            MockAgent.return_value = mock_agent
+
+            factory._create_serena_agent(config, [])
+            factory.agent = mock_agent
+            factory._serena_config = config
+
+            # ACT: Activate project for session_1
+            factory.activate_project_for_mcp_session("test_project")
+
+        # INV ASSERTION: session_2 unchanged
+        session_2_ctx = registry.get_session(session_id_2)
+        assert session_2_ctx is not None, (
+            "INV violation: Other session was removed\n"
+            "Contract: MCPFactoryActivationContract INV\n"
+            "EXPECTED: session_2 still in registry\n"
+            "ACTUAL: session_2 removed\n"
+            "Guidance: Operations on one session MUST NOT affect others"
+        )
+
+        assert Path(session_2_ctx.workspace_root).resolve() == other_workspace.resolve(), (
+            "INV violation: Other session workspace was modified\n"
+            "Contract: MCPFactoryActivationContract INV\n"
+            f"EXPECTED: workspace = {other_workspace}\n"
+            f"ACTUAL: workspace = {session_2_ctx.workspace_root}\n"
+            "Guidance: Operations on one session MUST NOT modify other sessions"
+        )
+
+
+class TestMCPFactoryRegistryAccess:
+    """
+    Tests for factory registry access.
+
+    Contract Reference: contracts/issue6_multi_project_contract.py
+    Supports: Session binding verification
+    """
+
+    def test_get_session_registry_returns_sessionregistry(self):
+        """
+        Contract: SerenaMCPFactory provides registry access
+        Enforces: get_session_registry() returns SessionRegistry instance
+
+        Theater Prevention:
+        - Verifies exact type, NOT just "truthy"
+        - Cannot pass with wrong type
         """
         factory = SerenaMCPFactory(project="test_project")
 
-        # ACT: Get registry from factory
         registry = factory.get_session_registry()
 
-        # ASSERT: Registry is valid SessionRegistry instance
         assert registry is not None, (
-            "\n=== FAILURE: test_mcp_session_registry_accessible_via_factory ===\n"
-            "WHAT FAILED: get_session_registry() returned None\n"
-            "WHY: Factory MUST expose registry for session binding and verification\n"
+            "Factory MUST provide session registry\n"
             "EXPECTED: SessionRegistry instance\n"
-            "ACTUAL: None\n"
-            "BEHAVIORAL GUIDANCE:\n"
-            "  - SerenaMCPFactory.get_session_registry() returns shared registry\n"
-            "  - Same registry used for bind_session() and get_session()\n"
+            "ACTUAL: None"
         )
 
         assert isinstance(registry, SessionRegistry), (
-            "\n=== FAILURE: test_mcp_session_registry_accessible_via_factory (type) ===\n"
-            "WHAT FAILED: get_session_registry() returned wrong type\n"
-            f"EXPECTED: SessionRegistry instance\n"
-            f"ACTUAL: {type(registry)}\n"
-            "BEHAVIORAL GUIDANCE:\n"
-            "  - Return the actual SessionRegistry, not a mock or wrapper\n"
+            "Factory MUST return actual SessionRegistry\n"
+            f"EXPECTED: SessionRegistry type\n"
+            f"ACTUAL: {type(registry).__name__}"
         )
 
-    def test_mcp_factory_activate_session_project_method_exists(self):
+    def test_factory_without_project_has_empty_registry(self):
         """
-        Contract: SerenaMCPFactory has method to activate project with session context
-        Enforces: POST: Factory provides activate_project_for_mcp_session() or equivalent
+        Contract: Factory without project does not auto-bind sessions
+        Enforces: Registry empty until explicit activation
 
-        Given: SerenaMCPFactory instance
-        When: Checking for activation method
-        Then: Method exists that accepts session_id and project_name
+        Theater Prevention:
+        - Verifies registry state, NOT method call absence
+        """
+        factory = SerenaMCPFactory(project=None)
 
-        Theater Check: Verify method EXISTS (signature check, not mock.called)
+        registry = factory.get_session_registry()
+        overview = registry.get_session_overview()
+
+        assert overview["total_count"] == 0, (
+            "Registry should be empty when no project specified\n"
+            f"EXPECTED: total_count = 0\n"
+            f"ACTUAL: total_count = {overview['total_count']}\n"
+            "Guidance: No automatic binding without explicit project"
+        )
+
+    def test_activate_project_for_mcp_session_method_exists(self):
+        """
+        Contract: MCPFactoryActivationContract
+        Enforces: Factory provides session-aware activation method
+
+        Theater Prevention:
+        - Verifies method existence AND is callable
         """
         factory = SerenaMCPFactory(project="test_project")
 
-        # ACT: Check if activation method exists
-        # Could be named: activate_project_for_mcp_session, _activate_session_project, etc.
-        has_activation = (
-            hasattr(factory, "activate_project_for_mcp_session")
-            or hasattr(factory, "_activate_project_for_session")
-            or hasattr(factory, "bind_session_to_project")
+        assert hasattr(factory, "activate_project_for_mcp_session"), (
+            "Factory MUST have activate_project_for_mcp_session method\n"
+            "Contract: MCPFactoryActivationContract\n"
+            "EXPECTED: Method exists\n"
+            "ACTUAL: Method not found"
         )
 
-        assert has_activation, (
-            "\n=== FAILURE: test_mcp_factory_activate_session_project_method_exists ===\n"
-            "WHAT FAILED: No session activation method found on SerenaMCPFactory\n"
-            "WHY: REQ-4b requires MCP factory to have method for session-aware activation\n"
-            "EXPECTED: One of these methods exists:\n"
-            "  - activate_project_for_mcp_session(session_id, project_name)\n"
-            "  - _activate_project_for_session()\n"
-            "  - bind_session_to_project(session_id)\n"
-            "ACTUAL: None of these methods found\n"
-            "BEHAVIORAL GUIDANCE:\n"
-            "  - Add method to SerenaMCPFactory that:\n"
-            "    1. Sets agent._current_session_id from MCP client session\n"
-            "    2. Calls agent.activate_session_project(project_name)\n"
-            "    3. Handles PRE violation (no session) gracefully\n"
-            "  Implementation:\n"
-            "    def activate_project_for_mcp_session(self, session_id: str) -> None:\n"
-            "        self.agent._current_session_id = session_id\n"
-            "        self.agent.activate_session_project(self.project)\n"
-        )
-
-    def test_mcp_without_project_skips_session_binding(self):
-        """
-        Contract: SerenaMCPFactory without project does not bind session
-        Enforces: POST: No registry pollution when project is None
-
-        Given: SerenaMCPFactory created WITHOUT project
-        When: MCP lifecycle starts
-        Then: SessionRegistry remains empty (no binding attempt)
-
-        Theater Check: Verify registry is empty, not just that method wasn't called
-        """
-        # Create MCP factory WITHOUT project
-        factory = SerenaMCPFactory(project=None)
-
-        # Get the factory's registry
-        registry = factory.get_session_registry()
-
-        # ASSERT: Registry remains empty (no automatic binding)
-        sessions = registry.get_session_overview()["sessions"]
-        assert len(sessions) == 0, (
-            "\n=== FAILURE: test_mcp_without_project_skips_session_binding ===\n"
-            "WHAT FAILED: Registry was modified even without project\n"
-            "WHY: No-project MCP sessions should not pollute registry\n"
-            f"EXPECTED: 0 sessions in registry\n"
-            f"ACTUAL: {len(sessions)} sessions found\n"
-            "BEHAVIORAL GUIDANCE:\n"
-            "  - Check self.project is not None before binding\n"
-            "  - No-project scenarios skip initial binding\n"
-            "  - Registry should remain clean until explicit activation\n"
+        assert callable(getattr(factory, "activate_project_for_mcp_session")), (
+            "activate_project_for_mcp_session MUST be callable\n"
+            "Contract: MCPFactoryActivationContract\n"
+            "EXPECTED: Callable method\n"
+            f"ACTUAL: {type(getattr(factory, 'activate_project_for_mcp_session'))}"
         )

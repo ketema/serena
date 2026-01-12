@@ -1,31 +1,38 @@
 """
-Adversarial TDD tests for SerenaAgent.activate_project() legacy shim.
+Cycle 3.3: Legacy activate_project() Shim Tests (REQ-5b)
 
-Contract: REQ-5b
-Component: Legacy activate_project() delegation layer
+Contract Reference: contracts/issue6_multi_project_contract.py
 
-Test Writer is BLIND to implementation - error messages are specifications.
-Coder is BLIND to test source - implements from error messages only.
+Tests trace to BackwardCompatibilityContract:
+- activate_project_legacy():
+  - PRE: project_name exists in config
+  - POST: _active_project set to project
+  - POST: SessionRegistry NOT modified
+  - INV: Does NOT create session
+  - INV: Does NOT call bind_session()
+  - ERRORS: ProjectNotFoundError if project_name not in config
 
-Requirements tested:
-- REQ-5b: Legacy activate_project() delegates to activate_session_project() when session exists
-- REQ-BACKWARDS-COMPAT: Legacy API surface preserved (no breaking signature changes)
-- REQ-FALLBACK: Without session context, legacy activate_project() works as before
+- activate_project_with_session():
+  - PRE: project_name exists in config
+  - PRE: Session context exists (from MCP transport)
+  - POST: Session bound to project workspace via SessionRegistry
+  - POST: Legacy _active_project NOT set (stateless agent)
+  - INV: _active_project unchanged
+  - INV: Other sessions unaffected
+  - ERRORS: ProjectNotFoundError if project_name not in config
 
-Behavioral Contract:
-    PRE: project_name exists in self.serena_config.projects
+- detect_execution_context():
+  - POST: Returns "mcp" if session context exists
+  - POST: Returns "cli" if no session context
+  - INV: Does not modify state (read-only detection)
 
-    POST: If session context exists → delegates to activate_session_project(project_name)
-    POST: If no session context → legacy behavior (activates project globally)
-    POST: Legacy state (self._active_project) mutated ONLY in legacy mode (no session)
-
-    INV: No cross-session side effects
-    INV: Session-based activation preserves stateless contract
-
-    ERRORS:
-    - ProjectNotFoundError: project_name not registered
+Theater Prevention (from CLAUDE.md):
+- Assertions verify ACTUAL registry state, NOT mock call counts
+- Tests verify observable POST conditions, NOT implementation details
+- Error messages describe WHAT behavior is expected, NOT HOW to implement
 """
 
+from contextvars import ContextVar
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -34,13 +41,17 @@ import pytest
 from src.serena.agent import ProjectNotFoundError, SerenaAgent
 
 # =============================================================================
-# TEST FIXTURES (reuse patterns from test_agent_session_activation.py)
+# TEST FIXTURES
 # =============================================================================
 
 
 @pytest.fixture
 def mock_session_registry():
-    """Mock SessionRegistry following contract."""
+    """
+    Mock SessionRegistry following contract.
+
+    Contract: SessionRegistry provides bind_session(), unbind_session(), get_session()
+    """
     registry = MagicMock()
     registry.bind_session = MagicMock()
     registry.unbind_session = MagicMock()
@@ -50,7 +61,11 @@ def mock_session_registry():
 
 @pytest.fixture
 def mock_serena_config(tmp_path: Path):
-    """Mock SerenaConfig with two test projects."""
+    """
+    Mock SerenaConfig with two test projects.
+
+    Contract: PRE for activate_project requires project in config
+    """
     import logging
 
     from src.serena.config.serena_config import LanguageBackend
@@ -98,20 +113,20 @@ def mock_serena_config(tmp_path: Path):
 
 @pytest.fixture
 def agent_with_session(mock_session_registry, mock_serena_config):
-    """Create SerenaAgent with mocked dependencies and active session."""
-    from contextvars import ContextVar
+    """
+    Create SerenaAgent with active session context (MCP mode).
 
+    Contract: detect_execution_context() returns "mcp" when session exists
+    """
     config, project_a, project_b = mock_serena_config
 
-    # Create agent with dependency injection (bypasses LanguageServerManager)
     agent = SerenaAgent(
         serena_config=config,
         session_registry=mock_session_registry,
-        session_bridge=MagicMock(),  # Trigger multi-project path
-        lsp_pool=MagicMock()         # Trigger multi-project path
+        session_bridge=MagicMock(),
+        lsp_pool=MagicMock(),
     )
 
-    # Set current session ID via ContextVar
     agent._current_session_id = ContextVar("session_id", default=None)
     agent._current_session_id.set("test-session-456")
 
@@ -120,158 +135,260 @@ def agent_with_session(mock_session_registry, mock_serena_config):
 
 @pytest.fixture
 def agent_without_session(mock_session_registry, mock_serena_config):
-    """Create SerenaAgent without active session (legacy mode)."""
-    from contextvars import ContextVar
+    """
+    Create SerenaAgent without session context (CLI mode).
 
+    Contract: detect_execution_context() returns "cli" when no session
+    """
     config, project_a, project_b = mock_serena_config
 
-    # Create agent with dependency injection (bypasses LanguageServerManager)
     agent = SerenaAgent(
         serena_config=config,
         session_registry=mock_session_registry,
-        session_bridge=MagicMock(),  # Trigger multi-project path
-        lsp_pool=MagicMock()         # Trigger multi-project path
+        session_bridge=MagicMock(),
+        lsp_pool=MagicMock(),
     )
 
-    # Initialize ContextVar but do NOT set a session
     agent._current_session_id = ContextVar("session_id", default=None)
+    # Do NOT set session - simulates CLI invocation
 
     yield agent, project_a, project_b
 
 
 # =============================================================================
-# TESTS: activate_project() Legacy Shim - 3 tests
+# TESTS: BackwardCompatibilityContract - activate_project_with_session()
 # =============================================================================
 
 
-def test_activate_project_delegates_when_session_present(agent_with_session):
+class TestActivateProjectWithSession:
     """
-    Contract: activate_project()
-    Enforces: POST: Delegates to activate_session_project() when session context exists
-    Requirement: REQ-5b - Legacy API delegates to new session-aware path
+    Tests for activate_project() when session context exists.
 
-    CRITICAL: Delegation means registry state changes, NOT legacy state mutation.
+    Contract Reference: contracts/issue6_multi_project_contract.py::BackwardCompatibilityContract
+    Method: activate_project_with_session()
     """
-    agent, project_a, _ = agent_with_session
 
-    # PRE: Verify session context exists
-    assert agent._current_session_id.get() == "test-session-456", (
-        "Test setup error: Session context must be present. "
-        "EXPECTED: _current_session_id.get() == 'test-session-456'. "
-        f"ACTUAL: {agent._current_session_id.get()}. "
-        "FIX: Use agent_with_session fixture (sets ContextVar)."
-    )
+    def test_post_session_bound_via_registry(self, agent_with_session):
+        """
+        Contract: BackwardCompatibilityContract.activate_project_with_session()
+        Enforces: POST: Session bound to project workspace via SessionRegistry
 
-    # ACTION: Call legacy activate_project() API
-    agent.activate_project("project_a")
+        Theater Prevention:
+        - Verifies registry.bind_session() called with correct args
+        - Cannot pass if delegation to session-aware path skipped
+        """
+        agent, project_a, _ = agent_with_session
 
-    # POST: SessionRegistry.bind_session was called (delegation occurred)
-    assert agent._session_registry.bind_session.call_count == 1, (
-        "POST violation: Legacy activate_project() must delegate to session-aware path when session exists (REQ-5b). "
-        "EXPECTED: SessionRegistry.bind_session called exactly once via activate_session_project(). "
-        f"ACTUAL: bind_session called {agent._session_registry.bind_session.call_count} times. "
-        "GUIDANCE: Delegation contract - when session context present, MUST invoke activate_session_project(). "
-        "Check session context (ContextVar) and conditionally delegate. "
-        "Session binding MUST go through SessionRegistry.bind_session. "
-        "Implementation free to choose: if/else on session context, wrapper method, strategy pattern."
-    )
+        # PRE: Verify session context exists
+        assert agent._current_session_id.get() == "test-session-456", (
+            "Test setup error: Session context must exist\n"
+            "Contract: PRE for activate_project_with_session\n"
+            f"EXPECTED: session_id = 'test-session-456'\n"
+            f"ACTUAL: session_id = {agent._current_session_id.get()}"
+        )
 
-    # POST: bind_session called with correct session_id and workspace
-    call_args = agent._session_registry.bind_session.call_args
-    session_id_arg = call_args[0][0]
-    workspace_arg = call_args[0][1]
+        # ACT: Activate project with session context
+        agent.activate_project("project_a")
 
-    assert session_id_arg == "test-session-456", (
-        "POST violation: Delegated call must use current session_id from ContextVar. "
-        "EXPECTED: session_id = 'test-session-456' (from _current_session_id). "
-        f"ACTUAL: session_id = {session_id_arg!r}. "
-        "GUIDANCE: Delegation MUST preserve session context - pass current session_id to registry. "
-        "Session ID from ContextVar, NOT hardcoded or derived from project."
-    )
+        # POST ASSERTION: bind_session() called
+        assert agent._session_registry.bind_session.call_count == 1, (
+            "POST violation: SessionRegistry.bind_session() not called\n"
+            "Contract: BackwardCompatibilityContract.activate_project_with_session()\n"
+            "EXPECTED: bind_session() called exactly once\n"
+            f"ACTUAL: bind_session() called {agent._session_registry.bind_session.call_count} times\n"
+            "Guidance: When session context exists, MUST delegate to session-aware activation"
+        )
 
-    assert workspace_arg == project_a.project_root, (
-        "POST violation: Delegated call must bind to correct workspace. "
-        f"EXPECTED: workspace_root = {project_a.project_root}. "
-        f"ACTUAL: workspace_arg = {workspace_arg}. "
-        "GUIDANCE: Delegation MUST resolve project_name to workspace_root correctly. "
-        "Use config.get_project(project_name).project_root for workspace resolution."
-    )
+    def test_post_bind_session_receives_correct_session_id(self, agent_with_session):
+        """
+        Contract: BackwardCompatibilityContract.activate_project_with_session()
+        Enforces: POST: Session bound with current session_id from ContextVar
+
+        Theater Prevention:
+        - Verifies EXACT session_id passed, NOT just "something was passed"
+        """
+        agent, project_a, _ = agent_with_session
+        expected_session_id = "test-session-456"
+
+        agent.activate_project("project_a")
+
+        call_args = agent._session_registry.bind_session.call_args
+        actual_session_id = call_args[0][0]
+
+        assert actual_session_id == expected_session_id, (
+            "POST violation: bind_session() received wrong session_id\n"
+            "Contract: BackwardCompatibilityContract.activate_project_with_session()\n"
+            f"EXPECTED: session_id = '{expected_session_id}'\n"
+            f"ACTUAL: session_id = '{actual_session_id}'\n"
+            "Guidance: session_id MUST come from _current_session_id ContextVar"
+        )
+
+    def test_post_bind_session_receives_correct_workspace(self, agent_with_session):
+        """
+        Contract: BackwardCompatibilityContract.activate_project_with_session()
+        Enforces: POST: Session bound to project.project_root workspace
+
+        Theater Prevention:
+        - Verifies EXACT workspace passed
+        """
+        agent, project_a, _ = agent_with_session
+        expected_workspace = project_a.project_root
+
+        agent.activate_project("project_a")
+
+        call_args = agent._session_registry.bind_session.call_args
+        actual_workspace = call_args[0][1]
+
+        assert actual_workspace == expected_workspace, (
+            "POST violation: bind_session() received wrong workspace\n"
+            "Contract: BackwardCompatibilityContract.activate_project_with_session()\n"
+            f"EXPECTED: workspace = {expected_workspace}\n"
+            f"ACTUAL: workspace = {actual_workspace}\n"
+            "Guidance: workspace MUST be project.project_root from config.get_project()"
+        )
 
 
-def test_activate_project_backwards_compatible(agent_without_session):
+# =============================================================================
+# TESTS: BackwardCompatibilityContract - activate_project_legacy()
+# =============================================================================
+
+
+class TestActivateProjectLegacy:
     """
-    Contract: activate_project()
-    Enforces: POST: Legacy behavior when no session context (backward compatibility)
-    Requirement: REQ-BACKWARDS-COMPAT, REQ-FALLBACK
+    Tests for activate_project() when no session context (CLI mode).
 
-    CRITICAL: Without session, legacy activate_project() operates in global mode (no registry).
+    Contract Reference: contracts/issue6_multi_project_contract.py::BackwardCompatibilityContract
+    Method: activate_project_legacy()
     """
-    agent, project_a, _ = agent_without_session
 
-    # PRE: Verify no session context (legacy CLI mode)
-    assert agent._current_session_id.get() is None, (
-        "Test setup error: No session context should exist for legacy mode test. "
-        "EXPECTED: _current_session_id.get() == None. "
-        f"ACTUAL: {agent._current_session_id.get()}. "
-        "FIX: Use agent_without_session fixture (no ContextVar set)."
-    )
+    def test_post_registry_not_modified(self, agent_without_session):
+        """
+        Contract: BackwardCompatibilityContract.activate_project_legacy()
+        Enforces: POST: SessionRegistry NOT modified
 
-    # ACTION: Call legacy activate_project() without session
-    agent.activate_project("project_a")
+        Theater Prevention:
+        - Verifies bind_session() NOT called
+        - Cannot pass if session-aware path incorrectly triggered
+        """
+        agent, project_a, _ = agent_without_session
 
-    # POST: SessionRegistry.bind_session was NOT called (legacy path, no delegation)
-    assert agent._session_registry.bind_session.call_count == 0, (
-        "POST violation: Legacy activate_project() without session MUST NOT invoke registry (REQ-FALLBACK). "
-        "EXPECTED: bind_session never called (legacy global mode). "
-        f"ACTUAL: bind_session called {agent._session_registry.bind_session.call_count} times. "
-        "GUIDANCE: Backward compatibility contract - NO session context = global activation (no registry). "
-        "Check session context (ContextVar) - if None, use legacy behavior (NO registry operations). "
-        "Legacy path preserves pre-multi-project behavior. "
-        "Implementation free to choose: conditional delegation, fallback path, mode switch."
-    )
+        # PRE: Verify no session context
+        assert agent._current_session_id.get() is None, (
+            "Test setup error: No session context should exist for legacy mode\n"
+            "Contract: PRE for activate_project_legacy\n"
+            f"EXPECTED: session_id = None\n"
+            f"ACTUAL: session_id = {agent._current_session_id.get()}"
+        )
 
-    # POST: Project was activated (some state change occurred, even if not registry)
-    # NOTE: We cannot verify _active_project mutation because we're BLIND to implementation.
-    # But we can verify no errors occurred and registry remains clean.
-    assert agent._session_registry.unbind_session.call_count == 0, (
-        "POST violation: Legacy mode should not unbind sessions (no sessions involved). "
-        "EXPECTED: unbind_session never called. "
-        f"ACTUAL: unbind_session called {agent._session_registry.unbind_session.call_count} times. "
-        "GUIDANCE: Legacy path operates globally - NO registry operations (bind or unbind)."
-    )
+        # ACT: Activate project without session
+        agent.activate_project("project_a")
+
+        # POST ASSERTION: bind_session() NOT called
+        assert agent._session_registry.bind_session.call_count == 0, (
+            "POST violation: SessionRegistry modified in legacy mode\n"
+            "Contract: BackwardCompatibilityContract.activate_project_legacy()\n"
+            "EXPECTED: bind_session() NOT called (legacy = no registry)\n"
+            f"ACTUAL: bind_session() called {agent._session_registry.bind_session.call_count} times\n"
+            "Guidance: CLI mode MUST NOT touch SessionRegistry"
+        )
+
+    def test_inv_no_unbind_in_legacy_mode(self, agent_without_session):
+        """
+        Contract: BackwardCompatibilityContract.activate_project_legacy()
+        Enforces: INV: Does NOT call unbind_session() (no sessions to unbind)
+
+        Theater Prevention:
+        - Verifies no registry mutation of any kind
+        """
+        agent, project_a, _ = agent_without_session
+
+        agent.activate_project("project_a")
+
+        assert agent._session_registry.unbind_session.call_count == 0, (
+            "INV violation: unbind_session() called in legacy mode\n"
+            "Contract: BackwardCompatibilityContract.activate_project_legacy()\n"
+            "EXPECTED: unbind_session() NOT called\n"
+            f"ACTUAL: unbind_session() called {agent._session_registry.unbind_session.call_count} times\n"
+            "Guidance: Legacy mode operates without sessions entirely"
+        )
 
 
-def test_activate_project_unknown_project_raises(agent_with_session):
+# =============================================================================
+# TESTS: Error Handling (shared across both modes)
+# =============================================================================
+
+
+class TestActivateProjectErrors:
     """
-    Contract: activate_project()
-    Enforces: ERRORS: ProjectNotFoundError for unknown project
-    Requirement: REQ-CONFIG - Project validation before activation
+    Tests for error handling in activate_project().
 
-    CRITICAL: Error handling must be consistent across delegation and legacy paths.
+    Contract Reference: contracts/issue6_multi_project_contract.py::BackwardCompatibilityContract
+    ERRORS clause applies to both legacy and session-aware paths
     """
-    agent, _, _ = agent_with_session
 
-    # ACTION + ASSERTION: Call with nonexistent project raises ProjectNotFoundError
-    with pytest.raises(ProjectNotFoundError) as exc_info:
-        agent.activate_project("nonexistent_project")
+    def test_errors_projectnotfounderror_with_session(self, agent_with_session):
+        """
+        Contract: BackwardCompatibilityContract
+        Enforces: ERRORS: ProjectNotFoundError if project_name not in config
 
-    # POST: Error message contains project_name
-    error_message = str(exc_info.value)
-    assert "nonexistent_project" in error_message, (
-        "ERROR contract violation: ProjectNotFoundError message must include project_name. "
-        "EXPECTED: Error message contains 'nonexistent_project'. "
-        f"ACTUAL: {error_message}. "
-        "GUIDANCE: Project validation MUST raise ProjectNotFoundError with project_name. "
-        "Error propagation MUST work for both delegation path (with session) and legacy path (no session). "
-        "Use config.get_project(project_name) for validation - it raises ProjectNotFoundError. "
-        "Implementation free to choose: validate before delegation, validate in delegate, config-level validation."
-    )
+        Theater Prevention:
+        - Verifies exact exception type raised
+        - Verifies error message contains project name
+        """
+        agent, _, _ = agent_with_session
 
-    # POST: No registry operations occurred (error before delegation)
-    assert agent._session_registry.bind_session.call_count == 0, (
-        "ERROR contract violation: Registry operations must NOT occur when project validation fails. "
-        "EXPECTED: bind_session never called (error before delegation). "
-        f"ACTUAL: bind_session called {agent._session_registry.bind_session.call_count} times. "
-        "GUIDANCE: Validation-before-action contract - verify project exists BEFORE registry operations. "
-        "Fail fast on invalid input to preserve system consistency."
-    )
+        with pytest.raises(ProjectNotFoundError) as exc_info:
+            agent.activate_project("nonexistent_project")
+
+        assert "nonexistent_project" in str(exc_info.value), (
+            "ERRORS violation: ProjectNotFoundError message should contain project name\n"
+            "Contract: BackwardCompatibilityContract ERRORS\n"
+            f"EXPECTED: Message contains 'nonexistent_project'\n"
+            f"ACTUAL: '{exc_info.value}'\n"
+            "Guidance: Error message MUST include invalid project_name for debugging"
+        )
+
+    def test_errors_projectnotfounderror_without_session(self, agent_without_session):
+        """
+        Contract: BackwardCompatibilityContract
+        Enforces: ERRORS: ProjectNotFoundError works in legacy mode too
+
+        Theater Prevention:
+        - Verifies error handling consistent across modes
+        """
+        agent, _, _ = agent_without_session
+
+        with pytest.raises(ProjectNotFoundError) as exc_info:
+            agent.activate_project("nonexistent_project")
+
+        assert "nonexistent_project" in str(exc_info.value), (
+            "ERRORS violation: ProjectNotFoundError message should contain project name\n"
+            "Contract: BackwardCompatibilityContract ERRORS\n"
+            f"EXPECTED: Message contains 'nonexistent_project'\n"
+            f"ACTUAL: '{exc_info.value}'\n"
+            "Guidance: Error handling MUST be consistent across MCP and CLI modes"
+        )
+
+    def test_errors_no_registry_operations_on_invalid_project(self, agent_with_session):
+        """
+        Contract: BackwardCompatibilityContract
+        Enforces: ERRORS: Registry not modified when project validation fails
+
+        Theater Prevention:
+        - Verifies no side effects on validation error
+        """
+        agent, _, _ = agent_with_session
+
+        try:
+            agent.activate_project("nonexistent_project")
+        except ProjectNotFoundError:
+            pass  # Expected
+
+        # POST ASSERTION: No registry operations occurred
+        assert agent._session_registry.bind_session.call_count == 0, (
+            "ERRORS violation: Registry modified despite validation failure\n"
+            "Contract: BackwardCompatibilityContract ERRORS\n"
+            "EXPECTED: bind_session() NOT called on invalid project\n"
+            f"ACTUAL: bind_session() called {agent._session_registry.bind_session.call_count} times\n"
+            "Guidance: Validate project BEFORE any registry operations (fail fast)"
+        )

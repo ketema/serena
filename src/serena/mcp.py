@@ -369,27 +369,43 @@ class SerenaMCPFactory:
     def activate_project_for_mcp_session(self, project_name: str) -> None:
         """
         Activate a project for the current MCP session.
-        
+
         REQ-4b: Use activate_session_project() instead of activate_project() for MCP clients.
         This method binds the session to the project workspace without triggering legacy activation.
-        
+
+        Contract Reference: contracts/issue6_multi_project_contract.py::MCPFactoryActivationContract
+
         PRE: self.agent is not None
-        PRE: project_name is valid project name or path
-        
-        POST: Session bound to project workspace via SessionRegistry
+        PRE: self.agent._current_session_id is not None (session context exists)
+        PRE: project_name is a string that exists in serena_config.project_names
+             OR project_name is a string path to existing directory
+
+        POST: SessionRegistry.bind_session(session_id, workspace_root) called
         POST: SessionRegistry.get_session(session_id) returns SessionContext
-        
+        POST: SessionContext.workspace_root == project.project_root.resolve()
+
+        INV: Only one workspace bound per session at a time
+        INV: Binding to same workspace is idempotent (no-op, returns immediately)
+        INV: Binding to different workspace unbinds previous workspace first
+        INV: Other sessions unaffected by this activation
+
+        ERRORS:
+        - ValueError: if agent is None ("Cannot activate session project: agent not initialized")
+        - ValueError: if session_id is None ("Cannot activate session project: no session ID on agent")
+        - ProjectNotFoundError: if project_name not in config and not valid path
+
         :param project_name: The name or path of the project to activate for this session
         """
+        # PRE: Validate agent exists
         if self.agent is None:
             raise ValueError("Cannot activate session project: agent not initialized")
-        
-        # Get session ID from agent
+
+        # PRE: Validate session_id exists
         session_id = self.agent._current_session_id
         if session_id is None:
             raise ValueError("Cannot activate session project: no session ID on agent")
-        
-        # Get project from config (use stored config from agent creation)
+
+        # PRE: Validate project exists in config
         config = self._serena_config if hasattr(self, '_serena_config') else self.agent.serena_config
         from serena.agent import ProjectNotFoundError
         project = config.get_project(project_name)
@@ -397,29 +413,28 @@ class SerenaMCPFactory:
             raise ProjectNotFoundError(
                 f"Project '{project_name}' not found: Not a valid project name."
             )
-        
+
         # Get workspace root
         from pathlib import Path
         workspace_root = Path(project.project_root)
-        
-        # Bind session directly via registry
-        # Access registry through agent or factory
+
+        # Get registry
         if hasattr(self.agent, '_session_registry'):
             registry = self.agent._session_registry
         else:
             registry = self.get_session_registry()
-        
-        # Check if already bound to same workspace (idempotent)
+
+        # INV: Check existing binding (implements idempotent and unbind-before-rebind)
         existing_session = registry.get_session(session_id)
         if existing_session is not None:
             if Path(existing_session.workspace_root).resolve() == workspace_root.resolve():
-                # Already bound to same workspace → no-op
+                # INV: Bound to same workspace → idempotent no-op
                 return
             else:
-                # Bound to different workspace → unbind old first
+                # INV: Bound to different workspace → unbind old first
                 registry.unbind_session(session_id)
-        
-        # Bind session to project workspace
+
+        # POST: Bind session to project workspace
         registry.bind_session(session_id, workspace_root, "explicit")
 
     def _get_initial_instructions(self) -> str:
