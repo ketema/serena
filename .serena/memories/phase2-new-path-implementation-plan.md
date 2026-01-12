@@ -15,13 +15,13 @@
 
 | Cycle | Description | Sub-Agent |
 |-------|-------------|-----------|
-| 2.1 | `SessionRegistry.get_session_overview()` (Observability) | test-writer → coder |
-| 2.2 | `GlobalLanguageServerPool.get_pool_stats()` (Observability) | test-writer → coder |
-| 2.3 | Dashboard API endpoints (`/get_session_overview`, `/get_lsp_pool_stats`) | test-writer → coder |
-| 2.4 | `SerenaAgent.activate_session_project()` (New Path) | test-writer → coder |
-| 2.5 | `SessionAwareToolDispatch` Implementation | test-writer → coder |
-| 2.6 | Structured Logging (`[Session: ID]`) | test-writer → coder |
-| 2.7 | End-to-End Integration Test (Real Concurrency) | test-writer → coder |
+| 2.1 | `SessionRegistry.get_session_overview()` (Observability) | adversarial-test-writer → adversarial-coder |
+| 2.2 | `GlobalLanguageServerPool.get_pool_stats()` (Observability) | adversarial-test-writer → adversarial-coder |
+| 2.3 | Dashboard API endpoints (`/get_session_overview`, `/get_lsp_pool_stats`) | adversarial-test-writer → adversarial-coder |
+| 2.4 | `SerenaAgent.activate_session_project()` (New Path) | adversarial-test-writer → adversarial-coder |
+| 2.5 | `SessionAwareToolDispatch` Implementation | adversarial-test-writer → adversarial-coder |
+| 2.6 | Structured Logging (`[Session: ID]`) | adversarial-test-writer → adversarial-coder |
+| 2.7 | End-to-End Integration Test (Real Concurrency) | adversarial-test-writer → adversarial-coder |
 | Gate | All Phase 2 tests pass + Observability verified | coordinator |
 
 ---
@@ -30,7 +30,7 @@
 
 ### Cycle 2.1 - RED: Contract & Tests
 
-**Invoke**: ↪ test-writer | 🚫 impl | ✓ req+TSR
+**Invoke**: ↪ adversarial-test-writer | 🚫 impl | ✓ req+TSR
 
 **Requirements**:
 - REQ-API-1: `get_session_overview()` returns list of active sessions.
@@ -42,7 +42,7 @@
 
 ### Cycle 2.1 - GREEN: Implementation
 
-**Invoke**: ↪ coder | 🚫 test source | ✓ error messages
+**Invoke**: ↪ adversarial-coder | 🚫 test source | ✓ error messages
 
 ---
 
@@ -50,7 +50,7 @@
 
 ### Cycle 2.2 - RED: Contract & Tests
 
-**Invoke**: ↪ test-writer | 🚫 impl | ✓ req+TSR
+**Invoke**: ↪ adversarial-test-writer | 🚫 impl | ✓ req+TSR
 
 **Requirements**:
 - REQ-API-2: `get_pool_stats()` returns active LSPs.
@@ -61,7 +61,7 @@
 
 ### Cycle 2.2 - GREEN: Implementation
 
-**Invoke**: ↪ coder | 🚫 test source | ✓ error messages
+**Invoke**: ↪ adversarial-coder | 🚫 test source | ✓ error messages
 
 ---
 
@@ -69,7 +69,7 @@
 
 ### Cycle 2.3a - RED: Unit Tests (Mocked)
 
-**Invoke**: ↪ test-writer | 🚫 impl | ✓ req+TSR
+**Invoke**: ↪ adversarial-test-writer | 🚫 impl | ✓ req+TSR
 
 **Requirements**:
 - `GET /get_session_overview` -> 200 OK (JSON)
@@ -83,7 +83,7 @@
 
 ### Cycle 2.3 - GREEN: Flask Routes
 
-**Invoke**: ↪ coder | 🚫 test source | ✓ error messages
+**Invoke**: ↪ adversarial-coder | 🚫 test source | ✓ error messages
 
 ---
 
@@ -91,7 +91,7 @@
 
 ### Cycle 2.4 - RED: Agent Activation Tests
 
-**Invoke**: ↪ test-writer | 🚫 impl | ✓ req+TSR
+**Invoke**: ↪ adversarial-test-writer | 🚫 impl | ✓ req+TSR
 
 **Requirements**:
 - REQ-4: `activate_session_project(project_name)` binds CURRENT session.
@@ -100,7 +100,7 @@
 
 ### Cycle 2.4 - GREEN: Implementation
 
-**Invoke**: ↪ coder | 🚫 test source | ✓ error messages
+**Invoke**: ↪ adversarial-coder | 🚫 test source | ✓ error messages
 
 ---
 
@@ -108,7 +108,7 @@
 
 ### Cycle 2.5 - RED: Dispatcher Tests
 
-**Invoke**: ↪ test-writer | 🚫 impl | ✓ req+TSR
+**Invoke**: ↪ adversarial-test-writer | 🚫 impl | ✓ req+TSR
 
 **Requirements**:
 - REQ-5: `dispatch_lsp_tool` routing flow.
@@ -116,7 +116,7 @@
 
 ### Cycle 2.5 - GREEN: Implementation
 
-**Invoke**: ↪ coder | 🚫 test source | ✓ error messages
+**Invoke**: ↪ adversarial-coder | 🚫 test source | ✓ error messages
 
 ---
 
@@ -124,7 +124,7 @@
 
 ### Cycle 2.6 - RED: Log Format Tests
 
-**Invoke**: ↪ test-writer | 🚫 impl | ✓ req+TSR
+**Invoke**: ↪ adversarial-test-writer | 🚫 impl | ✓ req+TSR
 
 **Requirements**:
 - REQ-LOG: Logs inside `run_with_session_context` have `[Session: <id>]` prefix.
@@ -132,7 +132,7 @@
 
 ### Cycle 2.6 - GREEN: Implementation
 
-**Invoke**: ↪ coder | 🚫 test source | ✓ error messages
+**Invoke**: ↪ adversarial-coder | 🚫 test source | ✓ error messages
 
 ---
 
