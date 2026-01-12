@@ -827,7 +827,7 @@ class SerenaAgent:
         # Check if session already bound to same workspace (idempotent)
         existing_session = self._session_registry.get_session(session_id)
         if existing_session is not None:
-            if existing_session.workspace_root == workspace_root.resolve():
+            if Path(existing_session.workspace_root).resolve() == workspace_root.resolve():
                 # POST: Already bound to same workspace → no-op (idempotent)
                 return
             else:
