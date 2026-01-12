@@ -89,6 +89,7 @@ PoolKey = Union["Language", tuple["Language", Path]]
 # BEHAVIORAL CONTRACTS
 # =============================================================================
 
+
 class GlobalLanguageServerPoolContract(ABC):
     """
     Behavioral contract for global LSP pool management (SYNC).
@@ -256,10 +257,32 @@ class GlobalLanguageServerPoolContract(ABC):
         """
         ...
 
+    @abstractmethod
+    def get_pool_stats(self) -> dict:
+        """
+        Get statistics about all managed LSP instances for observability.
+
+        PRE: none
+
+        POST: Returns dict with keys:
+            - "lsps": list of LSP stat dicts
+            - "total_count": int matching len(lsps)
+        POST: Each LSP dict contains:
+            - language: str (Language enum name)
+            - workspace_root: str (path or "shared" for multi-root)
+            - ref_count: int (current session references)
+            - status: str ("running", "idle", "stopped")
+
+        INVARIANT: This method is read-only - does not modify ref_count or pool state.
+        Thread-safety: Acquires pool_lock (read).
+        """
+        ...
+
 
 # =============================================================================
 # CAPABILITY DETECTION CONTRACT
 # =============================================================================
+
 
 class LSPCapabilityRegistryContract(ABC):
     """
@@ -300,6 +323,7 @@ class LSPCapabilityRegistryContract(ABC):
 # =============================================================================
 # TEST VERIFICATION HELPERS
 # =============================================================================
+
 
 def verify_pool_key_strategy(
     language: "Language",

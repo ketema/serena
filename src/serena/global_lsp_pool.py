@@ -273,6 +273,48 @@ class GlobalLanguageServerPool:
         with self._pool_lock:
             return set(self._session_refs.get(pool_key, set()))
 
+    def get_pool_stats(self) -> dict:
+        """
+        Get statistics about all managed LSP instances for observability.
+
+        PRE: none
+
+        POST: Returns dict with "lsps" (list) and "total_count" (int)
+        POST: Each LSP dict has: language, workspace_root, ref_count, status
+
+        Thread-safety: Acquires pool_lock (read).
+        """
+        with self._pool_lock:
+            lsp_stats = []
+            for pool_key, lsp in self._pool.items():
+                # Determine workspace_root based on pool_key type
+                if isinstance(pool_key, tuple):
+                    # Single-root: (Language, Path)
+                    language = pool_key[0]
+                    workspace_root = str(pool_key[1])
+                else:
+                    # Multi-root: Language only
+                    language = pool_key
+                    workspace_root = "shared"
+
+                # Get ref_count from session_refs (read-only)
+                ref_count = len(self._session_refs.get(pool_key, set()))
+
+                # Determine status from LSP running state
+                status = "running" if lsp.is_running() else "stopped"
+
+                lsp_stats.append({
+                    "language": language.name,
+                    "workspace_root": workspace_root,
+                    "ref_count": ref_count,
+                    "status": status,
+                })
+
+            return {
+                "lsps": lsp_stats,
+                "total_count": len(lsp_stats),
+            }
+
     def set_reclaim_callback(
         self,
         callback: Callable[[Language, Path], None] | None,
