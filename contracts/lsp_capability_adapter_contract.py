@@ -66,6 +66,55 @@ class MultiRootSupport:
 
 
 # =============================================================================
+# POOLING POLICY (REQ-ADAPT-1 to REQ-ADAPT-4)
+# =============================================================================
+
+class PoolingPolicy:
+    """
+    Defines how GlobalLanguageServerPool should manage LSP instances.
+
+    REQUIREMENTS SATISFIED:
+    - REQ-ADAPT-1: Adapter declares pooling strategy
+    - REQ-ADAPT-2: Pool queries adapter for strategy
+    - REQ-ADAPT-3: Strategy informs pool key generation
+    - REQ-ADAPT-4: Launch arguments for session isolation
+
+    Each policy determines:
+    - Whether LSP instances are shared across sessions/workspaces
+    - What pool key strategy to use (language vs language+root)
+    - Whether isolation mechanisms (cache paths, etc.) are needed
+    """
+
+    SHARED_INSTANCE = "shared_instance"
+    """
+    Single LSP instance shared across all workspace roots.
+    Pool key: language only
+    Use case: Multi-root LSPs (rust-analyzer, gopls, pylsp)
+    """
+
+    ISOLATED_PROCESS = "isolated_process"
+    """
+    Separate LSP process per workspace root.
+    Pool key: (language, workspace_root)
+    Use case: Single-root LSPs without special isolation needs (tsserver)
+    """
+
+    ISOLATED_WITH_RESOURCE_MANAGEMENT = "isolated_with_resource_management"
+    """
+    Separate LSP process per workspace root WITH additional resource isolation.
+    Pool key: (language, workspace_root)
+    Use case: LSPs requiring cache isolation (clangd with --cache-path)
+    """
+
+    FORCED_ISOLATION = "forced_isolation"
+    """
+    Always create new LSP instance, never share.
+    Pool key: (language, workspace_root, session_id)
+    Use case: Debugging, testing, or LSPs with known sharing bugs
+    """
+
+
+# =============================================================================
 # BEHAVIORAL CONTRACTS
 # =============================================================================
 
@@ -216,6 +265,58 @@ class LSPCapabilityAdapterContract(ABC):
         """
         ...
 
+    @abstractmethod
+    def get_pooling_policy(self) -> str:
+        """
+        Return the pooling policy for this LSP type.
+
+        PRE: None (stateless query)
+
+        POST: Returns one of PoolingPolicy constants:
+            - SHARED_INSTANCE: Share one LSP across all workspaces
+            - ISOLATED_PROCESS: Separate LSP per workspace
+            - ISOLATED_WITH_RESOURCE_MANAGEMENT: Separate LSP with cache isolation
+            - FORCED_ISOLATION: Never share (per-session instances)
+
+        REQUIREMENTS:
+        - REQ-ADAPT-1: Adapter declares pooling strategy
+        - REQ-ADAPT-2: Pool queries adapter before creating/reusing LSP
+
+        BEHAVIOR:
+        - Multi-root LSPs (rust-analyzer, gopls, pylsp): SHARED_INSTANCE
+        - Single-root LSPs (tsserver): ISOLATED_PROCESS
+        - Single-root LSPs needing cache isolation (clangd): ISOLATED_WITH_RESOURCE_MANAGEMENT
+        """
+        ...
+
+    @abstractmethod
+    def get_launch_arguments(
+        self,
+        workspace_root: Path,
+        session_id: str,
+    ) -> list[str]:
+        """
+        Return additional launch arguments for LSP process.
+
+        PRE: workspace_root is absolute Path
+        PRE: session_id is unique session identifier
+
+        POST: Returns list of CLI arguments (may be empty)
+        POST: Arguments are deterministic for same inputs (no random UUIDs)
+
+        REQUIREMENTS:
+        - REQ-ADAPT-4: Adapter provides launch arguments for isolation
+
+        BEHAVIOR:
+        - Default adapters: Return empty list []
+        - Clangd: Return ["--cache-path=<session-isolated-path>"]
+        - Other LSPs may add memory limits, log paths, etc.
+
+        NOTE: Arguments must be safe to append to LSP command line.
+        Implementation MUST ensure workspace isolation via session_id.
+        """
+        ...
+
 
 # =============================================================================
 # CONCRETE ADAPTER STUBS (Contracts only - implementation separate)
@@ -227,6 +328,7 @@ class RustAnalyzerAdapterContract(LSPCapabilityAdapterContract):
 
     CAPABILITIES:
     - multi_root_support: FULL
+    - pooling_policy: SHARED_INSTANCE
     - Supports workspace/didChangeWorkspaceFolders
     - Each workspace folder treated as potential Cargo workspace
 
@@ -239,6 +341,12 @@ class RustAnalyzerAdapterContract(LSPCapabilityAdapterContract):
     def multi_root_support(self) -> str:
         return MultiRootSupport.FULL
 
+    def get_pooling_policy(self) -> str:
+        return PoolingPolicy.SHARED_INSTANCE
+
+    def get_launch_arguments(self, workspace_root: Path, session_id: str) -> list[str]:
+        return []  # No special launch args needed
+
 
 class PylspAdapterContract(LSPCapabilityAdapterContract):
     """
@@ -246,12 +354,19 @@ class PylspAdapterContract(LSPCapabilityAdapterContract):
 
     CAPABILITIES:
     - multi_root_support: FULL
+    - pooling_policy: SHARED_INSTANCE
     - Supports workspace/didChangeWorkspaceFolders
     """
 
     @property
     def multi_root_support(self) -> str:
         return MultiRootSupport.FULL
+
+    def get_pooling_policy(self) -> str:
+        return PoolingPolicy.SHARED_INSTANCE
+
+    def get_launch_arguments(self, workspace_root: Path, session_id: str) -> list[str]:
+        return []  # No special launch args needed
 
 
 class GoplsAdapterContract(LSPCapabilityAdapterContract):
@@ -260,12 +375,19 @@ class GoplsAdapterContract(LSPCapabilityAdapterContract):
 
     CAPABILITIES:
     - multi_root_support: FULL
+    - pooling_policy: SHARED_INSTANCE
     - Supports workspace/didChangeWorkspaceFolders
     """
 
     @property
     def multi_root_support(self) -> str:
         return MultiRootSupport.FULL
+
+    def get_pooling_policy(self) -> str:
+        return PoolingPolicy.SHARED_INSTANCE
+
+    def get_launch_arguments(self, workspace_root: Path, session_id: str) -> list[str]:
+        return []  # No special launch args needed
 
 
 class TsServerAdapterContract(LSPCapabilityAdapterContract):
@@ -274,6 +396,7 @@ class TsServerAdapterContract(LSPCapabilityAdapterContract):
 
     CAPABILITIES:
     - multi_root_support: NONE
+    - pooling_policy: ISOLATED_PROCESS
     - Does NOT support dynamic workspace folder changes
     - Requires separate instance per project root
 
@@ -283,6 +406,12 @@ class TsServerAdapterContract(LSPCapabilityAdapterContract):
     @property
     def multi_root_support(self) -> str:
         return MultiRootSupport.NONE
+
+    def get_pooling_policy(self) -> str:
+        return PoolingPolicy.ISOLATED_PROCESS
+
+    def get_launch_arguments(self, workspace_root: Path, session_id: str) -> list[str]:
+        return []  # No special launch args needed
 
     def add_workspace_root(
         self,
@@ -308,8 +437,10 @@ class ClangdAdapterContract(LSPCapabilityAdapterContract):
 
     CAPABILITIES:
     - multi_root_support: NONE
+    - pooling_policy: ISOLATED_WITH_RESOURCE_MANAGEMENT
     - Uses compilation database per project
     - Requires separate instance per project root
+    - Requires --cache-path for session isolation
 
     POOL KEY: (Language.C, workspace_root) or (Language.CPP, workspace_root)
     """
@@ -317,6 +448,21 @@ class ClangdAdapterContract(LSPCapabilityAdapterContract):
     @property
     def multi_root_support(self) -> str:
         return MultiRootSupport.NONE
+
+    def get_pooling_policy(self) -> str:
+        return PoolingPolicy.ISOLATED_WITH_RESOURCE_MANAGEMENT
+
+    def get_launch_arguments(self, workspace_root: Path, session_id: str) -> list[str]:
+        """
+        Clangd requires --cache-path for session-isolated index caching.
+
+        The cache path MUST be deterministic (same inputs = same path)
+        and MUST include both session_id and workspace_root for isolation.
+        """
+        import hashlib
+        workspace_hash = hashlib.sha256(str(workspace_root).encode()).hexdigest()[:8]
+        cache_path = f"/tmp/serena_clangd_{session_id}_{workspace_hash}"
+        return [f"--cache-path={cache_path}"]
 
 
 # =============================================================================

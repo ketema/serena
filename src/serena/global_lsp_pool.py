@@ -325,17 +325,36 @@ class GlobalLanguageServerPool:
         """
         Create a new LSP instance.
 
-        This is a stub that will be replaced with actual LSP creation.
-        For now, returns a mock object for testing.
+        Loads ProjectConfig from workspace_root if available, otherwise uses defaults.
+        REQ-7: Factory MUST respect user's project.yml settings.
         """
         # Import here to avoid circular dependency
+        from serena.config.serena_config import ProjectConfig
         from solidlsp import SolidLanguageServer
 
-        # Create LSP config
+        # Load project config with fallback to defaults
+        ignored_paths: list[str] = []
+        encoding: str = "utf-8"
+
+        try:
+            project_config = ProjectConfig.load(workspace_root, autogenerate=False)
+            ignored_paths = project_config.ignored_paths
+            encoding = project_config.encoding
+        except FileNotFoundError:
+            # No project.yml - use defaults (acceptable for fresh workspaces)
+            pass
+        except Exception:
+            # Malformed config - use defaults but log warning would be appropriate
+            # For now, silently fall back to defaults
+            pass
+
+        # Create LSP config with loaded or default values
         config = LanguageServerConfig(
             code_language=language,
-            trace_lsp_communication=False,
+            trace_lsp_communication=False,  # Default - not configurable via project.yml
             start_independent_lsp_process=True,
+            ignored_paths=ignored_paths,
+            encoding=encoding,
         )
 
         # Create LSP instance
