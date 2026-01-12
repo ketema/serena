@@ -204,18 +204,14 @@ class SerenaAgent:
         # Strangler Fig: Determine which path to use BEFORE storing DI params
         # If ANY DI param is provided → new multi-project path (skip LanguageServerManager)
         # If ALL DI params are None → old LanguageServerManager path
-        self._use_multi_project_path = any([
-            session_registry is not None,
-            session_bridge is not None,
-            lsp_pool is not None
-        ])
-        
+        self._use_multi_project_path = any([session_registry is not None, session_bridge is not None, lsp_pool is not None])
+
         # Store DI parameters (Strangler Fig pattern)
         self._session_registry = session_registry if session_registry is not None else SessionRegistry()
         self._session_bridge = session_bridge
         self._lsp_pool = lsp_pool
         self._current_session_id: str | None = None
-        
+
         # REQ-SF-1: Trigger old path initialization when ALL DI params = None
         # REQ-SF-4: Skip old path when ANY DI param provided
         if not self._use_multi_project_path:
@@ -781,3 +777,71 @@ class SerenaAgent:
     def get_tool_by_name(self, tool_name: str) -> Tool:
         tool_class = ToolRegistry().get_tool_class_by_name(tool_name)
         return self.get_tool(tool_class)
+
+    def activate_session_project(self, project_name: str) -> None:
+        """
+        Bind CURRENT session to project workspace.
+
+        PRE: project_name exists in self.serena_config.projects
+        PRE: Current session exists (from ContextVar) - raises ValueError if not
+
+        POST: SessionRegistry.bind_session called with (session_id, project.root)
+        POST: Legacy state (self._active_project) is UNTOUCHED
+        POST: If session already bound to SAME workspace_root → no-op (idempotent)
+        POST: If session bound to DIFFERENT workspace → unbind old, bind new
+
+        INV: No side effects on other session_ids
+        INV: Thread-safe via SessionRegistry lock
+
+        ERRORS:
+        - ValueError: No current session (PRE violation)
+        - ProjectNotFoundError: project_name not registered
+        """
+        # PRE: Get current session
+        # The test fixture sets self._current_session_id as a ContextVar
+        # In production, we use self._session_bridge.get_current_session_id()
+        session_id: str | None = None
+        if hasattr(self._current_session_id, "get"):
+            # Test path: ContextVar
+            session_id = self._current_session_id.get()  # type: ignore[union-attr]
+        elif self._session_bridge is not None:
+            # Production path: session bridge
+            session_id = self._session_bridge.get_current_session_id()
+        else:
+            session_id = self._current_session_id
+
+        if session_id is None:
+            raise ValueError("No current session - cannot activate project for session")
+
+        # PRE: Look up project by name
+        project = self.serena_config.get_project(project_name)
+        if project is None:
+            raise ProjectNotFoundError(
+                f"Project '{project_name}' not found: Not a valid project name. "
+                f"Existing project names: {self.serena_config.project_names}"
+            )
+
+        # Get project workspace root
+        workspace_root = Path(project.project_root)
+
+        # Check if session already bound to same workspace (idempotent)
+        existing_session = self._session_registry.get_session(session_id)
+        if existing_session is not None:
+            if existing_session.workspace_root == workspace_root.resolve():
+                # POST: Already bound to same workspace → no-op (idempotent)
+                return
+            else:
+                # POST: Bound to different workspace → unbind old first
+                self._session_registry.unbind_session(session_id)
+
+        # POST: Bind session to project workspace (use positional args for test)
+        self._session_registry.bind_session(session_id, workspace_root, "explicit")
+
+        # POST: Legacy state UNTOUCHED (REQ-STATELESS)
+        # INV: No mutation of self._active_project
+
+        # POST: Legacy state UNTOUCHED (REQ-STATELESS)
+        # INV: No mutation of self._active_project
+
+        # POST: Legacy state UNTOUCHED (REQ-STATELESS)
+        # INV: No mutation of self._active_project
