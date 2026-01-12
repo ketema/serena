@@ -329,7 +329,22 @@ class SerenaMCPFactory:
 
     @asynccontextmanager
     async def server_lifespan(self, mcp_server: FastMCP) -> AsyncIterator[None]:
-        """Manage server startup and shutdown lifecycle."""
+        """Manage server startup and shutdown lifecycle.
+        
+        REQ-3: Initialize global services at startup to avoid first-request latency.
+        Services are initialized eagerly before yielding to ensure:
+        - No cold-start penalty on first tool call
+        - Thread-safe initialization completes before concurrent requests
+        - Predictable startup behavior for deployment health checks
+        """
+        # REQ-3: Initialize global services BEFORE yielding (eager initialization)
+        # This ensures no first-request latency penalty
+        log.info("Initializing global services...")
+        self.get_session_registry()
+        self.get_session_bridge()
+        self.get_lsp_pool()
+        log.info("Global services initialized")
+        
         openai_tool_compatible = self.context.name in ["chatgpt", "codex", "oaicompat-agent"]
         self._set_mcp_tools(mcp_server, openai_tool_compatible=openai_tool_compatible)
         log.info("MCP server lifetime setup complete")
@@ -351,6 +366,8 @@ class SerenaMCPFactory:
                 # Double-check pattern to prevent race conditions
                 if self._session_registry is None:
                     self._session_registry = SessionRegistry()
+                # CRITICAL: Return inside lock to ensure memory visibility (DCL fix)
+                return self._session_registry
         return self._session_registry
 
     def get_session_bridge(self) -> MCPSessionBridge:
@@ -367,6 +384,8 @@ class SerenaMCPFactory:
                 if self._session_bridge is None:
                     session_registry = self.get_session_registry()
                     self._session_bridge = MCPSessionBridge(session_registry)
+                # CRITICAL: Return inside lock to ensure memory visibility (DCL fix)
+                return self._session_bridge
         return self._session_bridge
 
     def get_lsp_pool(self) -> GlobalLanguageServerPool:
@@ -381,6 +400,8 @@ class SerenaMCPFactory:
                 # Double-check pattern to prevent race conditions
                 if self._lsp_pool is None:
                     self._lsp_pool = GlobalLanguageServerPool()
+                # CRITICAL: Return inside lock to ensure memory visibility (DCL fix)
+                return self._lsp_pool
         return self._lsp_pool
 
     def shutdown(self) -> None:

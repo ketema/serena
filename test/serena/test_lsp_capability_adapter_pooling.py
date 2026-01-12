@@ -15,17 +15,21 @@ from solidlsp.ls_config import Language
 # REQ-CLANGD-1, REQ-CLANGD-2, REQ-CLANGD-3: Clangd cache isolation
 def test_clangd_cache_path_isolation():
     """
-    Clangd cache path MUST contain session_id for isolation.
+    Clangd cache path MUST enable session isolation.
 
     GIVEN: ClangdAdapter instance
     WHEN: get_launch_arguments called with workspace_root and session_id
-    THEN: Return list containing --cache-path argument with session_id embedded
+    THEN: Return list containing --cache-path argument that varies by session
 
     GUIDANCE (Behavioral):
-    - Cache path MUST contain session_id substring for session isolation
-    - Cache path MUST differ between different workspace_roots
-    - Implementation free to choose: tempdir, hash, or path combination
+    - Cache path MUST vary by session_id (different sessions → different paths)
+    - Cache path MUST vary by workspace_root (different workspaces → different paths)
+    - session_id may be hashed for path safety (SEC-5 path traversal prevention)
     - MUST produce deterministic path for same inputs (no random UUIDs)
+
+    SECURITY NOTE (SEC-5):
+    - session_id is hashed before use in path to prevent path traversal attacks
+    - An attacker cannot use session_id="../../etc/passwd" to escape cache directory
     """
     adapter = ClangdAdapter()
     workspace = Path("/project-a")
@@ -38,7 +42,7 @@ def test_clangd_cache_path_isolation():
         f"REQ-CLANGD-1 VIOLATED: get_launch_arguments must return list\n"
         f"WHAT FAILED: Type check\n"
         f"WHY: Clangd requires cache-path argument for session isolation\n"
-        f"EXPECTED: list (e.g., ['--cache-path=/tmp/clangd-session-123-hash'])\n"
+        f"EXPECTED: list (e.g., ['--cache-path=/tmp/clangd-<hash>-<hash>'])\n"
         f"ACTUAL: {type(args).__name__}\n"
         f"GUIDANCE: Return list of string arguments for Clangd LSP launch"
     )
@@ -56,17 +60,29 @@ def test_clangd_cache_path_isolation():
         f"WHY: Clangd requires cache path for session isolation\n"
         f"EXPECTED: List containing string starting with '--cache-path='\n"
         f"ACTUAL: {args}\n"
-        f"GUIDANCE: Include '--cache-path=<path>' where path contains session_id"
+        f"GUIDANCE: Include '--cache-path=<path>' with session-unique component"
     )
 
-    # EXPECTED: Cache path contains session_id
-    assert session_id in cache_arg, (
-        f"REQ-CLANGD-2 VIOLATED: Cache path missing session_id\n"
-        f"WHAT FAILED: Session isolation requirement\n"
-        f"WHY: Different sessions MUST use different cache directories\n"
-        f"EXPECTED: Cache path containing 'session-123'\n"
-        f"ACTUAL: {cache_arg}\n"
-        f"GUIDANCE: Cache path MUST embed session_id substring for isolation"
+    # EXPECTED: Cache path starts with expected prefix and has deterministic format
+    cache_path = cache_arg.split("=", 1)[1]
+    assert cache_path.startswith("/tmp/serena_clangd_"), (
+        f"REQ-CLANGD-2 VIOLATED: Cache path format unexpected\n"
+        f"WHAT FAILED: Cache path prefix check\n"
+        f"WHY: Cache paths should be in /tmp with serena_clangd prefix\n"
+        f"EXPECTED: Path starting with '/tmp/serena_clangd_'\n"
+        f"ACTUAL: {cache_path}\n"
+        f"GUIDANCE: Cache path format: /tmp/serena_clangd_<session_hash>_<workspace_hash>"
+    )
+
+    # EXPECTED: Deterministic - same inputs produce same output
+    args2 = adapter.get_launch_arguments(workspace, session_id)
+    assert args == args2, (
+        f"REQ-CLANGD-3 VIOLATED: Non-deterministic cache path\n"
+        f"WHAT FAILED: Determinism requirement\n"
+        f"WHY: Same inputs MUST produce same cache path for reproducibility\n"
+        f"EXPECTED: {args}\n"
+        f"ACTUAL: {args2}\n"
+        f"GUIDANCE: Cache path computation MUST be deterministic (no random UUIDs)"
     )
 
 
@@ -276,3 +292,83 @@ def test_clangd_different_sessions_different_cache():
         f"ACTUAL: Both use {cache_path_a}\n"
         f"GUIDANCE: Cache path MUST embed session_id for isolation (critical for multi-session)"
     )
+
+
+
+def test_clangd_session_id_path_traversal_prevention():
+    """
+    SEC-5: Session ID MUST be sanitized to prevent path traversal attacks.
+
+    GIVEN: ClangdAdapter instance
+    WHEN: get_launch_arguments called with malicious session_id containing path traversal
+    THEN: Cache path MUST remain within /tmp (no escape via ../)
+
+    GUIDANCE (Behavioral):
+    - Malicious session_id="../../etc/passwd" MUST NOT escape /tmp
+    - All session_ids produce paths within /tmp/serena_clangd_*
+    - Implementation free to: sanitize, hash, validate, or reject
+    - CRITICAL SECURITY: Path injection is a CONSTITUTIONAL VIOLATION
+
+    ATTACK VECTOR (Prevented):
+    - Attacker controls session_id via MCP session header
+    - Without sanitization: --cache-path=/tmp/serena_clangd_../../etc/passwd_hash
+    - This could allow reading/writing files outside cache directory
+    """
+    adapter = ClangdAdapter()
+    workspace = Path("/project-a")
+
+    # Malicious session_ids attempting path traversal
+    malicious_session_ids = [
+        "../../etc/passwd",
+        "../../../tmp/evil",
+        "session/../../../root",
+        "..%2F..%2Fetc%2Fpasswd",  # URL encoded
+        "session\x00/etc/passwd",  # Null byte injection
+        "/absolute/path/attack",
+    ]
+
+    for malicious_id in malicious_session_ids:
+        args = adapter.get_launch_arguments(workspace, malicious_id)
+
+        # Find --cache-path argument
+        cache_arg = None
+        for arg in args:
+            if arg.startswith("--cache-path="):
+                cache_arg = arg
+                break
+
+        assert cache_arg is not None, f"Missing cache-path for session_id={malicious_id!r}"
+        cache_path = cache_arg.split("=", 1)[1]
+
+        # CRITICAL: Path must remain in /tmp/serena_clangd_* (no escape)
+        assert cache_path.startswith("/tmp/serena_clangd_"), (
+            f"SEC-5 VIOLATED: Path traversal attack succeeded\n"
+            f"WHAT FAILED: Path sanitization for malicious session_id\n"
+            f"WHY: Malicious session_id MUST NOT escape cache directory\n"
+            f"EXPECTED: Path starting with '/tmp/serena_clangd_'\n"
+            f"ACTUAL: {cache_path}\n"
+            f"ATTACK INPUT: session_id={malicious_id!r}\n"
+            f"GUIDANCE: session_id MUST be hashed or sanitized before path construction"
+        )
+
+        # CRITICAL: No path traversal sequences in final path
+        assert ".." not in cache_path, (
+            f"SEC-5 VIOLATED: Path contains traversal sequence\n"
+            f"WHAT FAILED: Path traversal prevention\n"
+            f"WHY: '..' in path allows escaping cache directory\n"
+            f"EXPECTED: Path without '..' sequences\n"
+            f"ACTUAL: {cache_path}\n"
+            f"ATTACK INPUT: session_id={malicious_id!r}\n"
+            f"GUIDANCE: Hash session_id to eliminate special characters"
+        )
+
+        # CRITICAL: No null bytes (can truncate path)
+        assert "\x00" not in cache_path, (
+            f"SEC-5 VIOLATED: Path contains null byte\n"
+            f"WHAT FAILED: Null byte injection prevention\n"
+            f"WHY: Null bytes can truncate paths in C-based systems\n"
+            f"EXPECTED: Path without null bytes\n"
+            f"ACTUAL: Path contains \\x00\n"
+            f"ATTACK INPUT: session_id={malicious_id!r}\n"
+            f"GUIDANCE: Hash session_id to eliminate null bytes"
+        )

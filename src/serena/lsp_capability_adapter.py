@@ -480,18 +480,25 @@ class ClangdAdapter(BaseSingleRootAdapter):
         """
         Return clangd-specific launch arguments with session-isolated cache path.
 
-        Cache path format: /tmp/serena_clangd_{session_id}_{workspace_hash}
-        - session_id: Ensures different sessions use different caches
+        Cache path format: /tmp/serena_clangd_{session_hash}_{workspace_hash}
+        - session_hash: Hash of session_id to prevent path traversal attacks
         - workspace_hash: Ensures different projects use different caches
         - Deterministic: Same inputs always produce same path
+
+        SECURITY: session_id is hashed to prevent path injection attacks.
+        An attacker cannot use session_id="../../etc/passwd" to escape the cache directory.
         """
         import hashlib
+
+        # SECURITY: Hash session_id to prevent path traversal attacks (SEC-5)
+        # Without this, session_id="../../etc/passwd" could escape /tmp
+        session_hash = hashlib.sha256(session_id.encode()).hexdigest()[:8]
 
         # Create deterministic hash of workspace_root
         workspace_hash = hashlib.sha256(str(workspace_root).encode()).hexdigest()[:8]
 
-        # Construct session-isolated cache path
-        cache_path = f"/tmp/serena_clangd_{session_id}_{workspace_hash}"
+        # Construct session-isolated cache path (both components are safe hashes)
+        cache_path = f"/tmp/serena_clangd_{session_hash}_{workspace_hash}"
 
         return [f"--cache-path={cache_path}"]
 
