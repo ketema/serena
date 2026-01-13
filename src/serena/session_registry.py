@@ -40,6 +40,11 @@ class SessionContext:
     state: SessionState = SessionState.CREATED
     ttl_seconds: int = SESSION_DEFAULT_TTL_SECONDS
 
+    # THREAD-SAFETY (INV-3 compliance)
+    # Lock ensures atomic check-then-act in touch() per contract INV-3:
+    # "Thread-safe (callers may invoke concurrently)"
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
     # BEHAVIORAL METHODS (SessionContextBehaviorContract)
 
     def touch(self) -> None:
@@ -52,22 +57,24 @@ class SessionContext:
         INV: No I/O, no logging, no external state, exception-safe
         ERRORS: None (PRE violation on EXPIRED state is silent no-op)
         """
-        # PRE-1: Session must not be EXPIRED (silent no-op if violated)
-        if self.state == SessionState.EXPIRED:
-            return  # ERROR: None - silent no-op per contract
+        # INV-3: Thread-safe via lock (atomic check-then-act)
+        with self._lock:
+            # PRE-1: Session must not be EXPIRED (silent no-op if violated)
+            if self.state == SessionState.EXPIRED:
+                return  # ERROR: None - silent no-op per contract
 
-        # POST-1: Update last_activity_time to current time
-        self.last_activity_time = datetime.now()
+            # POST-1: Update last_activity_time to current time
+            self.last_activity_time = datetime.now()
 
-        # POST-2: If state was IDLE, transition to ACTIVE
-        if self.state == SessionState.IDLE:
-            self.state = SessionState.ACTIVE
+            # POST-2: If state was IDLE, transition to ACTIVE
+            if self.state == SessionState.IDLE:
+                self.state = SessionState.ACTIVE
 
         # INV-1: activation_time, session_id, workspace_root unchanged (not modified)
         # INV-2: No logging, no metrics, no I/O, no external state (satisfied by not calling any)
-        # INV-3: Thread-safe (datetime.now() and attribute assignment are atomic)
-        # INV-4: No memory allocation, no handles (satisfied by not allocating)
-        # INV-5: Exception safety - never raises (no raise statements, no external calls)
+        # INV-3: Thread-safe (lock ensures atomic check-then-act)
+        # INV-4: No memory allocation beyond lock context manager
+        # INV-5: Exception safety - lock released even on exception (context manager)
 
     def is_expired(self) -> bool:
         """
