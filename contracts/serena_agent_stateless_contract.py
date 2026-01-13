@@ -142,9 +142,9 @@ class SerenaAgentStatelessContract(Protocol):
 
         PRE: None (always callable)
 
-        POST: Returns Project if current session has bound workspace
-        POST: Returns None if no active session or session has no project
-        POST: Project loaded from workspace_root in current session
+        POST-1: Returns Project if current session has bound workspace
+        POST-2: Returns None if no active session or session has no project
+        POST-3: Project loaded from workspace_root in current session
 
         INV (5-Point Checklist):
         1. State Invariance: No instance state modified (pure lookup)
@@ -169,8 +169,8 @@ class SerenaAgentStatelessContract(Protocol):
 
         PRE: None (defensive method - handles missing session gracefully by raising)
 
-        POST: Returns Project for current session's workspace
-        POST: Never returns None
+        POST-1: Returns Project for current session's workspace
+        POST-2: Never returns None
 
         INV (5-Point Checklist):
         1. State Invariance: No instance state modified
@@ -197,10 +197,10 @@ class SerenaAgentStatelessContract(Protocol):
         PRE: workspace_root exists and is absolute path
         PRE: source in ("explicit", "auto", "anonymous")
 
-        POST: SessionRegistry.bind_session() called
-        POST: set_current_session() called with new SessionContext
-        POST: Project loaded and initialized for workspace
-        POST: Returns loaded Project
+        POST-1: SessionRegistry.bind_session() called
+        POST-2: set_current_session() called with new SessionContext
+        POST-3: Project loaded and initialized for workspace
+        POST-4: Returns loaded Project
 
         INV (5-Point Checklist):
         1. State Invariance: NO _active_project modified (field doesn't exist)
@@ -223,9 +223,9 @@ class SerenaAgentStatelessContract(Protocol):
 
         PRE: session_id is string (may or may not exist)
 
-        POST: SessionRegistry.unbind_session() called
-        POST: If session_id was current session, set_current_session(None)
-        POST: Session no longer retrievable
+        POST-1: SessionRegistry.unbind_session() called
+        POST-2: If session_id was current session, set_current_session(None)
+        POST-3: Session no longer retrievable
 
         INV (5-Point Checklist):
         1. State Invariance: Other sessions unchanged
@@ -293,8 +293,9 @@ TEST_CASES = {
         {
             "name": "test_post1_registry_bind_called",
             "contract": "POST-1: SessionRegistry.bind_session() called",
-            "setup": "mock SessionRegistry per session_registry_contract.py",
+            "setup": "mock SessionRegistry (CL10: requires contract verification tests before mock use)",
             "assertion": "bind_session called with session_id, workspace_root",
+            "cl10_status": "PENDING - session_registry_contract.py exists but verification tests needed",
         },
         {
             "name": "test_post2_contextvar_set",
@@ -323,8 +324,8 @@ TEST_CASES = {
             "assertion": "get_current_session() returns None",
         },
         {
-            "name": "test_errors_idempotent",
-            "contract": "ERRORS-1: None raised (idempotent unbind)",
+            "name": "test_errors_none_idempotent",
+            "contract": "ERRORS: None (idempotent - never raises)",
             "setup": "deactivate non-existent session",
             "assertion": "no exception raised",
         },
