@@ -837,12 +837,11 @@ class TestMultiClientIntegrationNoMocks:
 
         workspace_map = {s["session_id"]: s["workspace_root"] for s in overview["sessions"]}
         assert workspace_map["client-a"] == str(temp_workspace_a), (
-            f"Integration violation: Overview workspace_root for client-a incorrect\n"
-            f"Contract: SessionRegistryContract.get_session_overview() integration\n"
+            f"POST violation: workspace_root in session dict incorrect\n"
+            f"Contract: SessionRegistryContract.get_session_overview() POST: workspace_root: str\n"
             f"EXPECTED: workspace_map['client-a'] == '{temp_workspace_a}'\n"
             f"ACTUAL: workspace_map['client-a'] == {workspace_map['client-a']}\n"
             f"GUIDANCE: get_session_overview MUST return exact workspace_root from bound sessions.\n"
-            f"          Theater test prevention: Verify EXACT mapping, not just set membership.\n"
         )
 
     def test_integration_disconnection_isolation_real_registry(
