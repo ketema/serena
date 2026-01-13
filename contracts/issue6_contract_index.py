@@ -27,6 +27,7 @@ from .issue6_constants import (
     SESSION_DEFAULT_TTL_SECONDS,
     SESSION_MAX_IDLE_SECONDS,
     SESSION_REAPER_INTERVAL_SECONDS,
+    TOUCH_STALENESS_THRESHOLD_SECONDS,
 )
 from .session_context_contract import (
     SessionContextBehaviorContract,
@@ -81,6 +82,7 @@ __all__ = [
     "SESSION_MAX_IDLE_SECONDS",
     "LSP_IDLE_TIMEOUT_SECONDS",
     "LSP_MAX_WORKSPACES_PER_INSTANCE",
+    "TOUCH_STALENESS_THRESHOLD_SECONDS",
     # Enums
     "SessionState",
     "SessionCreationTrigger",
@@ -125,11 +127,19 @@ def audit_contract_coverage() -> dict:
     """
     Audit contract coverage across all Issue #6 contracts.
 
-    PRE: All contract modules importable
-    POST: Returns dict mapping contract names to PRE/POST/INV counts
-    INV: Does not modify any state
+    PRE: All contract modules importable (imports already resolved at module load)
 
-    Returns dict mapping contract names to their PRE/POST/INV counts.
+    POST: Returns dict mapping contract names to PRE/POST/INV counts
+    POST: Each entry has keys: pre_count, post_count, inv_count, errors_count, has_all_sections
+
+    INV (5-Point Checklist):
+    1. State Invariance: No module or contract state modified
+    2. Side Effect Prohibition: No I/O, no logging, no external state
+    3. Ordering Constraints: None (pure function, stateless)
+    4. Resource Invariants: No memory leaks, no handles opened
+    5. Exception Safety: Never raises (always returns dict, possibly empty)
+
+    ERRORS: None (pure introspection function, never raises)
     """
     contracts = [
         ("SessionContextContract", SessionContextContract),

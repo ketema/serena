@@ -109,11 +109,19 @@ def verify_session_context_invariants(ctx) -> list[str]:
     """
     Verify all SessionContext invariants.
 
-    PRE: ctx is SessionContextContract instance
-    POST: Returns list of violation messages (empty if all pass)
-    INV: ctx unchanged
+    PRE: ctx is SessionContextContract instance (has session_id, workspace_root, etc.)
 
-    Returns list of violation messages (empty if all pass).
+    POST: Returns list of violation messages (empty if all pass)
+    POST: Each violation message identifies which INV was violated
+
+    INV (5-Point Checklist):
+    1. State Invariance: ctx completely unchanged (read-only inspection)
+    2. Side Effect Prohibition: No I/O, no logging, no external state
+    3. Ordering Constraints: None (pure function)
+    4. Resource Invariants: No memory allocation beyond return list
+    5. Exception Safety: Never raises (returns list even on invalid ctx)
+
+    ERRORS: None (never raises - returns empty list if ctx lacks expected attributes)
     """
     violations = []
 
@@ -137,12 +145,19 @@ def verify_cleanup_idempotent(cleanup_fn, session_id: str) -> bool:
     Verify cleanup is idempotent.
 
     PRE: cleanup_fn is callable accepting session_id
-    PRE: session_id is string
+    PRE: session_id is non-empty string
+
     POST: Returns True if cleanup is idempotent (no error on second call)
     POST: Returns False if second call raises
-    INV: Session state after second call same as after first
 
-    Calls cleanup twice, verifies no error on second call.
+    INV (5-Point Checklist):
+    1. State Invariance: Session state after second call same as after first
+    2. Side Effect Prohibition: Only calls cleanup_fn (no additional I/O)
+    3. Ordering Constraints: Calls cleanup_fn exactly twice, sequentially
+    4. Resource Invariants: No resource leaks from test
+    5. Exception Safety: Never raises (catches all exceptions, returns bool)
+
+    ERRORS: None (catches exceptions internally, returns False on any exception)
     """
     try:
         cleanup_fn(session_id)
@@ -161,14 +176,24 @@ def verify_path_boundary_enforcement(
     """
     Verify path boundary enforcement.
 
-    PRE: validator has validate_path_for_session method
+    PRE: validator has validate_path_for_session(session_id, path) method
     PRE: session_id exists in registry
     PRE: workspace_root is absolute Path
     PRE: test_cases is list of (relative_path, should_pass) tuples
-    POST: Returns list of failures (empty if all pass)
-    INV: Registry state unchanged
 
-    Returns list of failures.
+    POST: Returns list of failure messages (empty if all pass)
+    POST: Each failure identifies path and expected vs actual behavior
+
+    INV (5-Point Checklist):
+    1. State Invariance: Registry state unchanged, validator unchanged
+    2. Side Effect Prohibition: Only calls validator.validate_path_for_session
+    3. Ordering Constraints: Test cases processed in order
+    4. Resource Invariants: No resource leaks, no file handles
+    5. Exception Safety: Catches PathBoundaryError only, other exceptions propagate
+
+    ERRORS:
+    - Propagates any exception from validator that is not PathBoundaryError
+    - Does NOT raise for PathBoundaryError (expected case for boundary violations)
     """
     from .path_validation_contract import PathBoundaryError
 

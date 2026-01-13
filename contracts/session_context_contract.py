@@ -16,7 +16,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from .issue6_constants import SESSION_DEFAULT_TTL_SECONDS
+from .issue6_constants import SESSION_DEFAULT_TTL_SECONDS, TOUCH_STALENESS_THRESHOLD_SECONDS
 
 if TYPE_CHECKING:
     from solidlsp.ls_config import Language
@@ -51,6 +51,16 @@ class SessionContextContract:
            ALLOCATION: SessionContextBehaviorContract.touch() performs the update
            CALLER RESPONSIBILITY: Tool dispatch layer MUST call touch() on every tool invocation
            See: SessionContextBehaviorContract.touch() for update contract
+
+           OBSERVABLE ENFORCEMENT (testable via integration tests):
+           1. DETECTION: If tool completes AND (now - last_activity_time) > TOUCH_STALENESS_THRESHOLD_SECONDS,
+              caller violated this contract (didn't call touch())
+           2. VERIFICATION: Integration tests MUST verify that after any tool call:
+              - last_activity_time >= tool_start_time (touch was called)
+              - (now - last_activity_time) < TOUCH_STALENESS_THRESHOLD_SECONDS
+           3. THRESHOLD: See TOUCH_STALENESS_THRESHOLD_SECONDS in issue6_constants.py
+           4. AUDIT: Session reaper MAY log WARNING when detecting stale activity times
+              in non-EXPIRED sessions (indicates touch() caller violation)
     - INV-6: state transitions follow: CREATED -> ACTIVE -> IDLE -> EXPIRED (only forward)
     """
 
@@ -73,10 +83,21 @@ class SessionContextContract:
         """
         Validate invariants on construction.
 
-        PRE: Fields have been set by dataclass
-        POST: Instance is valid or ValueError raised
-        INV: No side effects beyond validation
-        INV: No external state modified
+        PRE: Fields have been set by dataclass __init__
+
+        POST: Instance is valid (all invariants satisfied)
+        POST: On invalid state, ValueError raised with INV reference
+
+        INV (5-Point Checklist):
+        1. State Invariance: Only validates, does not modify fields
+        2. Side Effect Prohibition: No I/O, no logging, no external state
+        3. Ordering Constraints: Called automatically after dataclass __init__
+        4. Resource Invariants: No memory allocation beyond exception
+        5. Exception Safety: On error, instance partially constructed (dataclass behavior)
+
+        ERRORS:
+        - ValueError: if session_id is empty (INV-1 violation)
+        - ValueError: if workspace_root is set but not absolute (INV-2 violation)
         """
         if not self.session_id:
             raise ValueError("INV-1 violation: session_id must be non-empty")

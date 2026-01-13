@@ -58,6 +58,24 @@ def validate_path(relative_path: str | Path, project_root: Path) -> Path:
 
     SECURITY CRITICAL: This function prevents path traversal attacks.
 
+    PRE: relative_path is str or Path (relative to project root or absolute within project)
+    PRE: project_root is absolute Path (enforced by ValueError)
+
+    POST: Returns resolved absolute Path within project boundary
+    POST: Returned path has no unresolved symlinks or ".." components
+    POST: Returned path starts with resolved project_root
+
+    INV (5-Point Checklist):
+    1. State Invariance: No file system state modified (read-only resolution)
+    2. Side Effect Prohibition: No I/O beyond Path.resolve(), no logging
+    3. Ordering Constraints: Symlinks resolved BEFORE boundary check (SEC-1)
+    4. Resource Invariants: No file handles opened/left open
+    5. Exception Safety: On error, raises immediately with no partial state
+
+    ERRORS:
+    - PathBoundaryError: If resolved path escapes project boundary
+    - ValueError: If project_root is not absolute
+
     Algorithm:
     1. Resolve project_root to canonical form (resolves symlinks)
     2. Join relative_path to project_root
@@ -65,29 +83,9 @@ def validate_path(relative_path: str | Path, project_root: Path) -> Path:
     4. Verify resolved path starts with resolved project_root
     5. Return resolved path or raise PathBoundaryError
 
-    Args:
-        relative_path: Path relative to project root (or absolute within project)
-        project_root: Absolute path to project root directory
-
-    Returns:
-        Resolved absolute path within project boundary
-
-    Raises:
-        PathBoundaryError: If resolved path escapes project boundary
-        ValueError: If project_root is not absolute
-
     Examples:
-        # Valid paths
         validate_path("src/main.py", Path("/project")) -> Path("/project/src/main.py")
-        validate_path("./lib/utils.py", Path("/project")) -> Path("/project/lib/utils.py")
-
-        # Invalid paths (raise PathBoundaryError)
-        validate_path("../../../etc/passwd", Path("/project"))  # Boundary escape
-        validate_path("/etc/passwd", Path("/project"))  # Absolute outside project
-
-        # Symlink attack (raises PathBoundaryError)
-        # If /project/link -> /etc, then:
-        validate_path("link/passwd", Path("/project"))  # Symlink traversal
+        validate_path("../outside", Path("/project")) -> raises PathBoundaryError
     """
     # Contract forwards to implementation (adversarial TDD architecture)
     from src.serena.path_validation import validate_path as _validate_path_impl
@@ -102,7 +100,20 @@ def verify_path_is_within_boundary(path: Path, boundary: Path) -> bool:
     """
     Verify a path is within the specified boundary.
 
-    Both paths MUST be resolved before calling this function.
+    PRE: path is resolved absolute Path (caller must resolve before calling)
+    PRE: boundary is resolved absolute Path (caller must resolve before calling)
+
+    POST: Returns True if path is within or equal to boundary
+    POST: Returns False if path is outside boundary
+
+    INV (5-Point Checklist):
+    1. State Invariance: path and boundary unchanged (pure query)
+    2. Side Effect Prohibition: No I/O, no logging, no external state
+    3. Ordering Constraints: None (pure function)
+    4. Resource Invariants: No memory allocation beyond bool
+    5. Exception Safety: Never raises (catches ValueError internally)
+
+    ERRORS: None (catches ValueError from relative_to, returns False)
     """
     try:
         path.relative_to(boundary)
@@ -115,8 +126,26 @@ def create_symlink_attack_scenario(test_dir: Path) -> tuple[Path, Path, Path]:
     """
     Create a test scenario for symlink traversal attack.
 
-    Returns:
-        (project_root, malicious_symlink, target_outside)
+    PRE: test_dir is absolute Path to existing directory with write permissions
+    PRE: test_dir/project does not exist OR is empty
+    PRE: test_dir/outside does not exist OR is empty
+
+    POST: Returns tuple (project_root, malicious_symlink, target_outside)
+    POST: project_root is test_dir/project (created)
+    POST: target_outside is test_dir/outside (created with secret.txt)
+    POST: malicious_symlink is project_root/escape -> target_outside
+
+    INV (5-Point Checklist):
+    1. State Invariance: test_dir itself unchanged, only subdirs created
+    2. Side Effect Prohibition: DECLARED - creates directories and files (test fixture)
+    3. Ordering Constraints: Directories created before symlink
+    4. Resource Invariants: All file handles closed after write
+    5. Exception Safety: Partial state on error (directories may exist)
+
+    ERRORS:
+    - OSError: If directory creation fails (permissions, disk full)
+    - OSError: If symlink creation fails (permissions, symlinks not supported)
+    - FileExistsError: If malicious_link already exists and is not a symlink
 
     Usage in tests:
         project, link, target = create_symlink_attack_scenario(tmp_path)
