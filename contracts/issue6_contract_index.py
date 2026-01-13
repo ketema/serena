@@ -61,6 +61,24 @@ from .path_validation_contract import (
     BOUNDARY_ERROR_REQUIREMENTS,
 )
 
+# Phase 4 contracts (legacy removal / statelessness)
+from .serena_agent_stateless_contract import (
+    SerenaAgentStatelessContract,
+    PROHIBITED_FIELDS as SERENA_AGENT_PROHIBITED_FIELDS,
+    get_current_session,
+    set_current_session,
+    verify_no_legacy_state,
+    verify_required_dependencies,
+)
+from .project_config_only_contract import (
+    ProjectConfigOnlyContract,
+    ProjectConfigContract,
+    PROHIBITED_LSP_METHODS,
+    verify_no_lsp_lifecycle_methods,
+    verify_no_lsp_instances,
+    verify_languages_are_strings,
+)
+
 from .issue6_contract_test_cases import (
     BACKWARD_COMPAT_TEST_CASES,
     CLEANUP_TEST_CASES,
@@ -120,6 +138,19 @@ __all__ = [
     "verify_session_context_invariants",
     "verify_cleanup_idempotent",
     "verify_path_boundary_enforcement",
+    # Phase 4 contracts (legacy removal / statelessness)
+    "SerenaAgentStatelessContract",
+    "SERENA_AGENT_PROHIBITED_FIELDS",
+    "get_current_session",
+    "set_current_session",
+    "verify_no_legacy_state",
+    "verify_required_dependencies",
+    "ProjectConfigOnlyContract",
+    "ProjectConfigContract",
+    "PROHIBITED_LSP_METHODS",
+    "verify_no_lsp_lifecycle_methods",
+    "verify_no_lsp_instances",
+    "verify_languages_are_strings",
 ]
 
 
@@ -153,6 +184,9 @@ def audit_contract_coverage() -> dict:
         ("MCPFactoryActivationContract", MCPFactoryActivationContract),
         ("SessionRegistryContract", SessionRegistryContract),
         ("PathValidationContract", PathValidationContract),
+        # Phase 4 contracts
+        ("SerenaAgentStatelessContract", SerenaAgentStatelessContract),
+        ("ProjectConfigOnlyContract", ProjectConfigOnlyContract),
     ]
 
     result = {}

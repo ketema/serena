@@ -125,9 +125,7 @@ STRUCTURE:
 4. Integration Tests (Multi-client, concurrency, disconnection)
 """
 
-import logging
 import threading
-from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -137,41 +135,19 @@ import pytest
 # =============================================================================
 # IMPORT AUTHORITATIVE CONTRACTS
 # =============================================================================
-
 from contracts.issue6_contract_index import (
-    # Constants
-    SESSION_DEFAULT_TTL_SECONDS,
-    SESSION_ANONYMOUS_TTL_SECONDS,
-    SESSION_MAX_IDLE_SECONDS,
-    TOUCH_STALENESS_THRESHOLD_SECONDS,
-    # Enums
-    SessionState,
-    SessionCreationTrigger,
-    # Data contracts
-    SessionContextContract as SessionContextDataContract,
     # Behavioral contracts
-    SessionContextBehaviorContract,
-    SessionRegistryContract,
-    PathValidationContract,
-    MCPFactoryActivationContract,
-    BackwardCompatibilityContract,
-    # Path validation utilities
     PathBoundaryError,
-    validate_path,
-    verify_path_is_within_boundary,
+    # Constants
+    SessionState,
     create_symlink_attack_scenario,
-    SECURITY_TEST_CASES,
-    # Session registry utilities
-    verify_session_context,
+    validate_path,
     verify_isolation,
-    # Test cases
-    SESSION_CONTEXT_TEST_CASES,
-    PATH_VALIDATION_TEST_CASES,
-    MCP_FACTORY_ACTIVATION_TEST_CASES,
-    BACKWARD_COMPAT_TEST_CASES,
-    # Verification helpers
-    verify_session_context_invariants,
-    verify_path_boundary_enforcement,
+    verify_path_is_within_boundary,
+    verify_session_context,
+)
+from contracts.issue6_contract_index import (
+    SessionContextContract as SessionContextDataContract,
 )
 
 # =============================================================================
@@ -411,8 +387,9 @@ class TestSessionContextBehaviorContract:
         - Category: positive
         - Adversarial: Implementation-blind
         """
-        from serena.session_registry import SessionContext
         from datetime import timedelta
+
+        from serena.session_registry import SessionContext
 
         ctx = SessionContext(
             session_id="test-session",
@@ -481,12 +458,12 @@ class TestSessionRegistryContract:
         )
 
         assert verify_session_context(session_ctx), (
-            f"POST-1 violation: Retrieved context does not satisfy SessionContext contract\n"
-            f"Contract: SessionRegistryContract.bind_session() POST-1\n"
-            f"EXPECTED: session_ctx has all required fields (session_id, workspace_root, etc.)\n"
-            f"ACTUAL: verify_session_context(session_ctx) == False\n"
-            f"GUIDANCE: bind_session MUST create valid SessionContext.\n"
-            f"          Verify all required fields: session_id, workspace_root, activation_source, activation_time.\n"
+            "POST-1 violation: Retrieved context does not satisfy SessionContext contract\n"
+            "Contract: SessionRegistryContract.bind_session() POST-1\n"
+            "EXPECTED: session_ctx has all required fields (session_id, workspace_root, etc.)\n"
+            "ACTUAL: verify_session_context(session_ctx) == False\n"
+            "GUIDANCE: bind_session MUST create valid SessionContext.\n"
+            "          Verify all required fields: session_id, workspace_root, activation_source, activation_time.\n"
         )
 
     def test_registry_bind_session_post2_workspace_root_resolves(
@@ -676,12 +653,12 @@ class TestSessionRegistryContract:
 
         # Verify correct workspace_root mapping (no cross-talk)
         assert verify_isolation(session_registry, "thread-a", "thread-b"), (
-            f"INV-4 violation: Sessions not properly isolated after concurrent bind\n"
-            f"Contract: SessionRegistryContract Global INV-4\n"
-            f"EXPECTED: Each session has different workspace_root or session_id\n"
-            f"ACTUAL: verify_isolation(thread-a, thread-b) == False\n"
-            f"GUIDANCE: Thread-safety MUST prevent workspace_root corruption.\n"
-            f"          Verify Lock is held during entire bind operation, not just partial state update.\n"
+            "INV-4 violation: Sessions not properly isolated after concurrent bind\n"
+            "Contract: SessionRegistryContract Global INV-4\n"
+            "EXPECTED: Each session has different workspace_root or session_id\n"
+            "ACTUAL: verify_isolation(thread-a, thread-b) == False\n"
+            "GUIDANCE: Thread-safety MUST prevent workspace_root corruption.\n"
+            "          Verify Lock is held during entire bind operation, not just partial state update.\n"
         )
 
 
@@ -751,21 +728,21 @@ class TestPathValidationContract:
 
             # Verify error attributes (ERROR-1 requirements)
             assert hasattr(exc_info.value, 'resolved_path'), (
-                f"ERROR-1 violation: PathBoundaryError missing 'resolved_path' attribute\n"
-                f"Contract: PathValidationContract.validate_path() ERROR-1\n"
-                f"EXPECTED: PathBoundaryError has 'resolved_path' attribute\n"
-                f"ACTUAL: No 'resolved_path' attribute found\n"
-                f"GUIDANCE: PathBoundaryError MUST include resolved_path for debugging.\n"
-                f"          Set exc.resolved_path = resolved_path before raising.\n"
+                "ERROR-1 violation: PathBoundaryError missing 'resolved_path' attribute\n"
+                "Contract: PathValidationContract.validate_path() ERROR-1\n"
+                "EXPECTED: PathBoundaryError has 'resolved_path' attribute\n"
+                "ACTUAL: No 'resolved_path' attribute found\n"
+                "GUIDANCE: PathBoundaryError MUST include resolved_path for debugging.\n"
+                "          Set exc.resolved_path = resolved_path before raising.\n"
             )
 
             assert hasattr(exc_info.value, 'project_root'), (
-                f"ERROR-1 violation: PathBoundaryError missing 'project_root' attribute\n"
-                f"Contract: PathValidationContract.validate_path() ERROR-1\n"
-                f"EXPECTED: PathBoundaryError has 'project_root' attribute\n"
-                f"ACTUAL: No 'project_root' attribute found\n"
-                f"GUIDANCE: PathBoundaryError MUST include project_root for remediation.\n"
-                f"          Set exc.project_root = project_root before raising.\n"
+                "ERROR-1 violation: PathBoundaryError missing 'project_root' attribute\n"
+                "Contract: PathValidationContract.validate_path() ERROR-1\n"
+                "EXPECTED: PathBoundaryError has 'project_root' attribute\n"
+                "ACTUAL: No 'project_root' attribute found\n"
+                "GUIDANCE: PathBoundaryError MUST include project_root for remediation.\n"
+                "          Set exc.project_root = project_root before raising.\n"
             )
 
     def test_path_validate_path_sec1_symlink_traversal_prevention(self, tmp_path: Path):
