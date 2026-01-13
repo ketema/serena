@@ -131,15 +131,17 @@ def audit_contract_coverage() -> dict:
 
     POST: Returns dict mapping contract names to PRE/POST/INV counts
     POST: Each entry has keys: pre_count, post_count, inv_count, errors_count, has_all_sections
+    POST: On introspection errors, entry has error_message key instead of counts
 
     INV (5-Point Checklist):
     1. State Invariance: No module or contract state modified
     2. Side Effect Prohibition: No I/O, no logging, no external state
     3. Ordering Constraints: None (pure function, stateless)
     4. Resource Invariants: No memory leaks, no handles opened
-    5. Exception Safety: Never raises (always returns dict, possibly empty)
+    5. Exception Safety: GUARANTEED never raises - all introspection errors caught and
+       recorded in result dict with error_message key
 
-    ERRORS: None (pure introspection function, never raises)
+    ERRORS: None (all exceptions caught internally, recorded in result dict)
     """
     contracts = [
         ("SessionContextContract", SessionContextContract),
@@ -155,23 +157,34 @@ def audit_contract_coverage() -> dict:
 
     result = {}
     for name, contract in contracts:
-        methods = [m for m in dir(contract) if not m.startswith("_") and callable(getattr(contract, m, None))]
+        try:
+            methods = [m for m in dir(contract) if not m.startswith("_") and callable(getattr(contract, m, None))]
+        except Exception as e:
+            result[f"{name}"] = {"error_message": f"Failed to inspect contract: {e}"}
+            continue
+
         for method in methods:
-            method_obj = getattr(contract, method, None)
-            if method_obj is None:
-                continue
-            doc = method_obj.__doc__ or ""
-            result[f"{name}.{method}"] = {
-                "pre_count": doc.count("PRE:"),
-                "post_count": doc.count("POST:"),
-                "inv_count": doc.count("INV:"),
-                "errors_count": doc.count("ERRORS:"),
-                "has_all_sections": (
-                    doc.count("PRE:") > 0 and
-                    doc.count("POST:") > 0 and
-                    doc.count("INV:") > 0
-                ),
-            }
+            key = f"{name}.{method}"
+            try:
+                method_obj = getattr(contract, method, None)
+                if method_obj is None:
+                    continue
+                doc = getattr(method_obj, "__doc__", None) or ""
+                if not isinstance(doc, str):
+                    doc = str(doc)
+                result[key] = {
+                    "pre_count": doc.count("PRE:"),
+                    "post_count": doc.count("POST:"),
+                    "inv_count": doc.count("INV:"),
+                    "errors_count": doc.count("ERRORS:"),
+                    "has_all_sections": (
+                        doc.count("PRE:") > 0 and
+                        doc.count("POST:") > 0 and
+                        doc.count("INV:") > 0
+                    ),
+                }
+            except Exception as e:
+                result[key] = {"error_message": f"Failed to inspect method: {e}"}
     return result
 
 

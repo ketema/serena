@@ -49,18 +49,25 @@ class SessionContextContract:
     - INV-4: lsp_workspace_folders tracks ONLY workspaces registered with LSP
     - INV-5: last_activity_time updated on every tool call, never backdated
            ALLOCATION: SessionContextBehaviorContract.touch() performs the update
-           CALLER RESPONSIBILITY: Tool dispatch layer MUST call touch() on every tool invocation
-           See: SessionContextBehaviorContract.touch() for update contract
+
+           MANDATORY ENFORCEMENT MECHANISM (structural guarantee):
+           1. DECORATOR REQUIREMENT: All tool methods MUST be decorated with @session_touch_wrapper
+              which calls session.touch() BEFORE delegating to the tool implementation.
+              This is NOT optional - undecorated tool methods are CONTRACT VIOLATIONS.
+           2. STRUCTURAL INVARIANT: Tool dispatch layer SHALL NOT invoke tool.apply() directly;
+              it MUST invoke via the wrapper that ensures touch() is called.
+           3. REGISTRATION GATE: Tool registration MUST verify @session_touch_wrapper presence;
+              tools without the decorator SHALL be rejected at registration time.
 
            OBSERVABLE ENFORCEMENT (testable via integration tests):
            1. DETECTION: If tool completes AND (now - last_activity_time) > TOUCH_STALENESS_THRESHOLD_SECONDS,
-              caller violated this contract (didn't call touch())
+              the structural guarantee was bypassed (indicates framework bug, not caller error)
            2. VERIFICATION: Integration tests MUST verify that after any tool call:
               - last_activity_time >= tool_start_time (touch was called)
               - (now - last_activity_time) < TOUCH_STALENESS_THRESHOLD_SECONDS
            3. THRESHOLD: See TOUCH_STALENESS_THRESHOLD_SECONDS in issue6_constants.py
-           4. AUDIT: Session reaper MAY log WARNING when detecting stale activity times
-              in non-EXPIRED sessions (indicates touch() caller violation)
+           4. AUDIT: Session reaper MAY log ERROR (not WARNING) when detecting stale activity times
+              in non-EXPIRED sessions (indicates framework invariant violation)
     - INV-6: state transitions follow: CREATED -> ACTIVE -> IDLE -> EXPIRED (only forward)
     """
 
