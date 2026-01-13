@@ -75,6 +75,8 @@ class ProjectConfigContract:
 
     INV: Configuration does not change during Project lifetime
     INV: No LSP state stored in configuration
+
+    ERRORS: None (data class - no methods that raise)
     """
 
     # Required configuration fields
@@ -416,6 +418,7 @@ def verify_no_lsp_lifecycle_methods(project: Any) -> None:
 
     ERRORS:
     - AssertionError: if any prohibited method exists
+    - TypeError: if project lacks __dict__ (non-inspectable object)
     """
     for method in PROHIBITED_LSP_METHODS:
         assert not hasattr(project, method), (
@@ -438,6 +441,7 @@ def verify_no_lsp_instances(project: Any) -> None:
 
     ERRORS:
     - AssertionError: if any LSP instance found in project attributes
+    - TypeError: if project lacks __dict__ (non-inspectable object)
     """
     lsp_type_names = [
         "SolidLanguageServer",
@@ -473,6 +477,8 @@ def verify_languages_are_strings(project: Any) -> None:
 
     ERRORS:
     - AssertionError: if languages contains non-string values
+    - TypeError: if project lacks __dict__ (non-inspectable object)
+    - AttributeError: if project lacks languages property
     """
     languages = project.languages
     for i, lang in enumerate(languages):

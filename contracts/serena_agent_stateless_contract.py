@@ -84,7 +84,8 @@ def set_current_session(session: Optional[Any]) -> None:
     4. Resource Invariants: No file handles, no memory beyond ContextVar
     5. Exception Safety: Never raises
 
-    ERRORS: None (never raises)
+    ERRORS:
+    - TypeError: if session is not SessionContext or None (type validation)
     """
     _current_session.set(session)
 
@@ -304,8 +305,8 @@ TEST_CASES = {
             "assertion": "get_current_session() returns matching SessionContext",
         },
         {
-            "name": "test_inv5_exception_safety_unbinds",
-            "contract": "INV-5: On error, unbind session and clear ContextVar",
+            "name": "test_exception_safety_unbinds",
+            "contract": "INV 5-point #5 (Exception Safety): On error, unbind session and clear ContextVar",
             "setup": "Project.load raises exception",
             "assertion": "session unbound, ContextVar is None",
         },
