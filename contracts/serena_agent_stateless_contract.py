@@ -294,9 +294,9 @@ TEST_CASES = {
         {
             "name": "test_post1_registry_bind_called",
             "contract": "POST-1: SessionRegistry.bind_session() called",
-            "setup": "mock SessionRegistry (CL10: requires contract verification tests before mock use)",
-            "assertion": "bind_session called with session_id, workspace_root",
-            "cl10_status": "PENDING - session_registry_contract.py exists but verification tests needed",
+            "setup": "integration test with real SessionRegistry (CL10 compliant - no mock)",
+            "assertion": "registry.get_session(session_id) returns SessionContext after activation",
+            "cl10_status": "COMPLIANT - integration test verifies POST via observable state",
         },
         {
             "name": "test_post2_contextvar_set",
