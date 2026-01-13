@@ -12,6 +12,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+# Import from contracts to ensure alignment
+from contracts.issue6_constants import SESSION_DEFAULT_TTL_SECONDS
+from contracts.session_context_contract import SessionState
+
 # =============================================================================
 # DATA STRUCTURES
 # =============================================================================
@@ -30,6 +34,63 @@ class SessionContext:
     # OPTIONAL FIELDS
     active_modes: list[str] = field(default_factory=list)  # Currently active modes
     lsp_references: dict[str, Any] = field(default_factory=dict)  # language → LSP instance reference
+
+    # LIFECYCLE TRACKING (SessionContextContract fields)
+    last_activity_time: datetime = field(default_factory=datetime.now)
+    state: SessionState = SessionState.CREATED
+    ttl_seconds: int = SESSION_DEFAULT_TTL_SECONDS
+
+    # BEHAVIORAL METHODS (SessionContextBehaviorContract)
+
+    def touch(self) -> None:
+        """
+        Update last_activity_time to current time.
+
+        PRE: Session is in CREATED, ACTIVE, or IDLE state (not EXPIRED)
+        POST: last_activity_time = datetime.now()
+        POST: If state was IDLE, state transitions to ACTIVE
+        INV: No I/O, no logging, no external state, exception-safe
+        ERRORS: None (PRE violation on EXPIRED state is silent no-op)
+        """
+        # PRE-1: Session must not be EXPIRED (silent no-op if violated)
+        if self.state == SessionState.EXPIRED:
+            return  # ERROR: None - silent no-op per contract
+
+        # POST-1: Update last_activity_time to current time
+        self.last_activity_time = datetime.now()
+
+        # POST-2: If state was IDLE, transition to ACTIVE
+        if self.state == SessionState.IDLE:
+            self.state = SessionState.ACTIVE
+
+        # INV-1: activation_time, session_id, workspace_root unchanged (not modified)
+        # INV-2: No logging, no metrics, no I/O, no external state (satisfied by not calling any)
+        # INV-3: Thread-safe (datetime.now() and attribute assignment are atomic)
+        # INV-4: No memory allocation, no handles (satisfied by not allocating)
+        # INV-5: Exception safety - never raises (no raise statements, no external calls)
+
+    def is_expired(self) -> bool:
+        """
+        Check if session has exceeded TTL.
+
+        PRE: None (pure query, always safe to call)
+        POST: Returns True if (now - last_activity_time) > ttl_seconds
+        POST: Returns False otherwise
+        INV: ALL fields unchanged, no side effects, never raises
+        ERRORS: None
+        """
+        # POST-1: TTL check - (now - last_activity_time) > ttl_seconds
+        elapsed = (datetime.now() - self.last_activity_time).total_seconds()
+        is_ttl_exceeded = elapsed > self.ttl_seconds
+
+        # POST-2: Return bool result
+        return is_ttl_exceeded
+
+        # INV-1: ALL fields unchanged (pure read-only query - no assignments)
+        # INV-2: No logging, no metrics, no I/O, no external state (satisfied by not calling any)
+        # INV-3: Thread-safe (read-only, no mutations)
+        # INV-4: No memory allocation, no handles (satisfied by not allocating)
+        # INV-5: Never raises (no raise statements, no external calls)
 
 
 # =============================================================================
