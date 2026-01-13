@@ -268,10 +268,7 @@ class SerenaMCPFactory:
         self.agent = agent
         self._serena_config = serena_config
         
-        # REQ-4b: Bind session for MCP clients after agent creation
-        if self.project is not None and hasattr(agent, '_current_session_id') and agent._current_session_id is not None:
-            # Call factory's activation method to bind session
-            self.activate_project_for_mcp_session(self.project)
+        # REQ-4b: Session activation handled during request lifecycle
         
         return agent
 
@@ -376,7 +373,7 @@ class SerenaMCPFactory:
         Contract Reference: contracts/issue6_multi_project_contract.py::MCPFactoryActivationContract
 
         PRE: self.agent is not None
-        PRE: self.agent._current_session_id is not None (session context exists)
+        PRE: current session context exists via MCPSessionBridge
         PRE: project_name is a string that exists in serena_config.project_names
              OR project_name is a string path to existing directory
 
@@ -401,7 +398,7 @@ class SerenaMCPFactory:
             raise ValueError("Cannot activate session project: agent not initialized")
 
         # PRE: Validate session_id exists
-        session_id = self.agent._current_session_id
+        session_id = self.get_session_bridge().get_current_session_id()
         if session_id is None:
             raise ValueError("Cannot activate session project: no session ID on agent")
 
@@ -419,23 +416,7 @@ class SerenaMCPFactory:
         workspace_root = Path(project.project_root)
 
         # Get registry
-        if hasattr(self.agent, '_session_registry'):
-            registry = self.agent._session_registry
-        else:
-            registry = self.get_session_registry()
-
-        # INV: Check existing binding (implements idempotent and unbind-before-rebind)
-        existing_session = registry.get_session(session_id)
-        if existing_session is not None:
-            if Path(existing_session.workspace_root).resolve() == workspace_root.resolve():
-                # INV: Bound to same workspace → idempotent no-op
-                return
-            else:
-                # INV: Bound to different workspace → unbind old first
-                registry.unbind_session(session_id)
-
-        # POST: Bind session to project workspace
-        registry.bind_session(session_id, workspace_root, "explicit")
+        self.agent.activate_session_project(session_id, workspace_root, source="explicit")
 
     def _get_initial_instructions(self) -> str:
         assert self.agent is not None

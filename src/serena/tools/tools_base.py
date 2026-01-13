@@ -75,7 +75,7 @@ class Component(ABC):
             language_server = self.agent.language_server
             assert language_server is not None
 
-        return LanguageServerSymbolRetriever(language_server, agent=self.agent)
+        return LanguageServerSymbolRetriever(agent=self.agent, language_server=language_server)
 
     @property
     def project(self) -> Project:
@@ -265,7 +265,7 @@ class Tool(Component):
             try:
                 # check whether the tool requires an active project and language server
                 if not isinstance(self, ToolMarkerDoesNotRequireActiveProject):
-                    if self.agent._active_project is None:
+                    if self.agent.get_active_project() is None:
                         return (
                             "Error: No active project. Ask the user to provide the project path or to select a project from this list of known projects: "
                             + f"{self.agent.serena_config.project_names}"

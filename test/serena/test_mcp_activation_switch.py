@@ -32,6 +32,24 @@ from serena.mcp import SerenaMCPFactory
 from serena.session_registry import SessionRegistry
 
 
+def _make_mock_agent(registry: SessionRegistry, config: MagicMock, project_name: str) -> MagicMock:
+    mock_agent = MagicMock()
+    mock_agent._session_registry = registry
+    mock_agent.serena_config = config
+
+    def activate_session_project(session_id: str, workspace_root: Path, source: str = "explicit"):
+        existing = registry.get_session(session_id)
+        if existing is not None:
+            if Path(existing.workspace_root).resolve() == Path(workspace_root).resolve():
+                return config.get_project(project_name)
+            registry.unbind_session(session_id)
+        registry.bind_session(session_id, Path(workspace_root), source)
+        return config.get_project(project_name)
+
+    mock_agent.activate_session_project = activate_session_project
+    return mock_agent
+
+
 @pytest.fixture
 def mock_serena_config(tmp_path: Path):
     """
@@ -95,23 +113,26 @@ class TestMCPFactoryActivationContract:
         session_id = "mcp-session-post-test"
 
         factory = SerenaMCPFactory(project="test_project")
+        factory._session_registry = registry
+        bridge = factory.get_session_bridge()
+        token = bridge.set_session_context(session_id)
 
-        with (
-            patch.object(factory, "_create_default_serena_config", return_value=config),
-            patch("serena.mcp.SerenaAgent", autospec=True) as MockAgent,
-        ):
-            mock_agent = MagicMock()
-            mock_agent._session_registry = registry
-            mock_agent._current_session_id = session_id
-            mock_agent.serena_config = config
-            MockAgent.return_value = mock_agent
+        try:
+            with (
+                patch.object(factory, "_create_default_serena_config", return_value=config),
+                patch("serena.mcp.SerenaAgent", autospec=True) as MockAgent,
+            ):
+                mock_agent = _make_mock_agent(registry, config, "test_project")
+                MockAgent.return_value = mock_agent
 
-            factory._create_serena_agent(config, [])
-            factory.agent = mock_agent
-            factory._serena_config = config
+                factory._create_serena_agent(config, [])
+                factory.agent = mock_agent
+                factory._serena_config = config
 
-            # ACT: Activate project for MCP session
-            factory.activate_project_for_mcp_session("test_project")
+                # ACT: Activate project for MCP session
+                factory.activate_project_for_mcp_session("test_project")
+        finally:
+            bridge.reset_session_context(token)
 
         # POST ASSERTION: get_session(session_id) returns SessionContext
         session_ctx = registry.get_session(session_id)
@@ -138,22 +159,25 @@ class TestMCPFactoryActivationContract:
         session_id = "mcp-session-workspace-test"
 
         factory = SerenaMCPFactory(project="test_project")
+        factory._session_registry = registry
+        bridge = factory.get_session_bridge()
+        token = bridge.set_session_context(session_id)
 
-        with (
-            patch.object(factory, "_create_default_serena_config", return_value=config),
-            patch("serena.mcp.SerenaAgent", autospec=True) as MockAgent,
-        ):
-            mock_agent = MagicMock()
-            mock_agent._session_registry = registry
-            mock_agent._current_session_id = session_id
-            mock_agent.serena_config = config
-            MockAgent.return_value = mock_agent
+        try:
+            with (
+                patch.object(factory, "_create_default_serena_config", return_value=config),
+                patch("serena.mcp.SerenaAgent", autospec=True) as MockAgent,
+            ):
+                mock_agent = _make_mock_agent(registry, config, "test_project")
+                MockAgent.return_value = mock_agent
 
-            factory._create_serena_agent(config, [])
-            factory.agent = mock_agent
-            factory._serena_config = config
+                factory._create_serena_agent(config, [])
+                factory.agent = mock_agent
+                factory._serena_config = config
 
-            factory.activate_project_for_mcp_session("test_project")
+                factory.activate_project_for_mcp_session("test_project")
+        finally:
+            bridge.reset_session_context(token)
 
         session_ctx = registry.get_session(session_id)
         expected_workspace = workspace_path.resolve()
@@ -194,7 +218,7 @@ class TestMCPFactoryActivationContract:
     def test_pre_session_id_none_raises_valueerror(self, mock_serena_config):
         """
         Contract: MCPFactoryActivationContract
-        Enforces: PRE: self.agent._current_session_id is not None
+        Enforces: PRE: current session context exists via MCPSessionBridge
         ERRORS: ValueError if session_id is None
 
         Theater Prevention:
@@ -204,8 +228,9 @@ class TestMCPFactoryActivationContract:
         config, _ = mock_serena_config
         factory = SerenaMCPFactory(project="test_project")
 
+        registry = SessionRegistry()
+        factory._session_registry = registry
         mock_agent = MagicMock()
-        mock_agent._current_session_id = None  # Explicitly violate PRE
         mock_agent.serena_config = config
         factory.agent = mock_agent
         factory._serena_config = config
@@ -236,16 +261,19 @@ class TestMCPFactoryActivationContract:
         config, _ = mock_serena_config
         registry = SessionRegistry()
         factory = SerenaMCPFactory(project="test_project")
+        factory._session_registry = registry
+        bridge = factory.get_session_bridge()
+        token = bridge.set_session_context("valid-session")
 
-        mock_agent = MagicMock()
-        mock_agent._session_registry = registry
-        mock_agent._current_session_id = "valid-session"
-        mock_agent.serena_config = config
-        factory.agent = mock_agent
-        factory._serena_config = config
+        try:
+            mock_agent = _make_mock_agent(registry, config, "test_project")
+            factory.agent = mock_agent
+            factory._serena_config = config
 
-        with pytest.raises(ProjectNotFoundError) as exc_info:
-            factory.activate_project_for_mcp_session("nonexistent_project")
+            with pytest.raises(ProjectNotFoundError) as exc_info:
+                factory.activate_project_for_mcp_session("nonexistent_project")
+        finally:
+            bridge.reset_session_context(token)
 
         assert "nonexistent_project" in str(exc_info.value), (
             "ERRORS violation: ProjectNotFoundError should contain project name\n"
@@ -269,34 +297,37 @@ class TestMCPFactoryActivationContract:
         session_id = "mcp-session-idempotent-test"
 
         factory = SerenaMCPFactory(project="test_project")
+        factory._session_registry = registry
+        bridge = factory.get_session_bridge()
+        token = bridge.set_session_context(session_id)
 
-        with (
-            patch.object(factory, "_create_default_serena_config", return_value=config),
-            patch("serena.mcp.SerenaAgent", autospec=True) as MockAgent,
-        ):
-            mock_agent = MagicMock()
-            mock_agent._session_registry = registry
-            mock_agent._current_session_id = session_id
-            mock_agent.serena_config = config
-            MockAgent.return_value = mock_agent
+        try:
+            with (
+                patch.object(factory, "_create_default_serena_config", return_value=config),
+                patch("serena.mcp.SerenaAgent", autospec=True) as MockAgent,
+            ):
+                mock_agent = _make_mock_agent(registry, config, "test_project")
+                MockAgent.return_value = mock_agent
 
-            factory._create_serena_agent(config, [])
-            factory.agent = mock_agent
-            factory._serena_config = config
+                factory._create_serena_agent(config, [])
+                factory.agent = mock_agent
+                factory._serena_config = config
 
-            # First activation
-            factory.activate_project_for_mcp_session("test_project")
+                # First activation
+                factory.activate_project_for_mcp_session("test_project")
 
-            # Capture state after first
-            session_after_first = registry.get_session(session_id)
-            workspace_after_first = session_after_first.workspace_root
+                # Capture state after first
+                session_after_first = registry.get_session(session_id)
+                workspace_after_first = session_after_first.workspace_root
 
-            # Second activation (should be no-op)
-            factory.activate_project_for_mcp_session("test_project")
+                # Second activation (should be no-op)
+                factory.activate_project_for_mcp_session("test_project")
 
-            # Capture state after second
-            session_after_second = registry.get_session(session_id)
-            workspace_after_second = session_after_second.workspace_root
+                # Capture state after second
+                session_after_second = registry.get_session(session_id)
+                workspace_after_second = session_after_second.workspace_root
+        finally:
+            bridge.reset_session_context(token)
 
         # INV ASSERTION: State unchanged
         assert workspace_after_first == workspace_after_second, (
@@ -327,23 +358,26 @@ class TestMCPFactoryActivationContract:
         registry.bind_session(session_id_2, other_workspace, "explicit")
 
         factory = SerenaMCPFactory(project="test_project")
+        factory._session_registry = registry
+        bridge = factory.get_session_bridge()
+        token = bridge.set_session_context(session_id_1)
 
-        with (
-            patch.object(factory, "_create_default_serena_config", return_value=config),
-            patch("serena.mcp.SerenaAgent", autospec=True) as MockAgent,
-        ):
-            mock_agent = MagicMock()
-            mock_agent._session_registry = registry
-            mock_agent._current_session_id = session_id_1  # Operate on session_1 only
-            mock_agent.serena_config = config
-            MockAgent.return_value = mock_agent
+        try:
+            with (
+                patch.object(factory, "_create_default_serena_config", return_value=config),
+                patch("serena.mcp.SerenaAgent", autospec=True) as MockAgent,
+            ):
+                mock_agent = _make_mock_agent(registry, config, "test_project")
+                MockAgent.return_value = mock_agent
 
-            factory._create_serena_agent(config, [])
-            factory.agent = mock_agent
-            factory._serena_config = config
+                factory._create_serena_agent(config, [])
+                factory.agent = mock_agent
+                factory._serena_config = config
 
-            # ACT: Activate project for session_1
-            factory.activate_project_for_mcp_session("test_project")
+                # ACT: Activate project for session_1
+                factory.activate_project_for_mcp_session("test_project")
+        finally:
+            bridge.reset_session_context(token)
 
         # INV ASSERTION: session_2 unchanged
         session_2_ctx = registry.get_session(session_id_2)

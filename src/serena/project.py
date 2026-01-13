@@ -2,14 +2,13 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pathspec
 from sensai.util.string import ToStringMixin
 
-from serena.config.serena_config import DEFAULT_TOOL_TIMEOUT, ProjectConfig, get_serena_managed_in_project_dir
+from serena.config.serena_config import ProjectConfig, get_serena_managed_in_project_dir
 from serena.constants import SERENA_FILE_ENCODING, SERENA_MANAGED_DIR_NAME
-from serena.ls_manager import LanguageServerFactory, LanguageServerManager
 from serena.path_validation import PathBoundaryError, validate_path
 from serena.text_utils import MatchedConsecutiveLines, search_files
 from serena.util.file_system import GitignoreParser, match_path
@@ -17,9 +16,6 @@ from serena.util.general import save_yaml
 from solidlsp import SolidLanguageServer
 from solidlsp.ls_config import Language
 from solidlsp.ls_utils import FileUtils
-
-if TYPE_CHECKING:
-    from serena.lsp_manager import LSPManager
 
 log = logging.getLogger(__name__)
 
@@ -63,7 +59,6 @@ class Project(ToStringMixin):
         self.project_root = project_root
         self.project_config = project_config
         self.memories_manager = MemoriesManager(project_root)
-        self.language_server_manager: LanguageServerManager | None = None
         self._is_newly_created = is_newly_created
 
         # create .gitignore file in the project's Serena data folder if not yet present
@@ -372,85 +367,9 @@ class Project(ToStringMixin):
             source_file_path=relative_file_path,
         )
 
-    def create_lsp_manager(
-        self,
-        log_level: int = logging.INFO,
-        ls_timeout: float | None = DEFAULT_TOOL_TIMEOUT - 5,
-        trace_lsp_communication: bool = False,
-        ls_specific_settings: dict[Language, Any] | None = None,
-    ) -> "LSPManager":
-        """
-        Create an LSPManager for managing multiple language servers (polyglot support).
-
-        :param log_level: the log level for the language servers
-        :param ls_timeout: the timeout for the language servers
-        :param trace_lsp_communication: whether to trace LSP communication
-        :param ls_specific_settings: optional LS specific configuration per language
-        :return: the LSPManager instance
-        """
-        from serena.lsp_manager import LSPManager
-
-        ls_logger = LanguageServerLogger(log_level=log_level)
-        settings = SolidLSPSettings(
-            solidlsp_dir=SERENA_MANAGED_DIR_IN_HOME,
-            project_data_relative_path=SERENA_MANAGED_DIR_NAME,
-            ls_specific_settings=ls_specific_settings or {},
-        )
-
-        log.info(f"Creating LSPManager for {len(self.languages)} languages: {[lang.value for lang in self.languages]}")
-        return LSPManager(
-            languages=self.languages,
-            project_root=self.project_root,
-            config=self.project_config,
-            logger=ls_logger,
-            settings=settings,
-            timeout=ls_timeout,
-        )
-
-    def create_language_server(
-        self,
-        log_level: int = logging.INFO,
-        ls_timeout: float | None = DEFAULT_TOOL_TIMEOUT - 5,
-        trace_lsp_communication: bool = False,
-        ls_specific_settings: dict[Language, Any] | None = None,
-    ) -> LanguageServerManager:
-        """
-        Creates the language server manager for the project, starting one language server per configured programming language.
-
-        DEPRECATED: Use create_lsp_manager() for polyglot support.
-        This method creates a single LSP for the first language (backward compatibility).
-
-        :param project: either a path to the project root or a ProjectConfig instance.
-            If no project.yml is found, the default project configuration will be used.
-        :param log_level: the log level for the language server
-        :param ls_timeout: the timeout for the language server
-        :param trace_lsp_communication: whether to trace LSP communication
-        :param ls_specific_settings: optional LS specific configuration of the language server,
-            see docstrings in the inits of subclasses of SolidLanguageServer to see what values may be passed.
-        :return: the language server manager, which is also stored in the project instance
-        """
-        # if there is an existing instance, stop its language servers first
-        if self.language_server_manager is not None:
-            log.info("Stopping existing language server manager ...")
-            self.language_server_manager.stop_all()
-            self.language_server_manager = None
-
-        log.info(f"Creating language server manager for {self.project_root}")
-        factory = LanguageServerFactory(
-            project_root=self.project_root,
-            encoding=self.project_config.encoding,
-            ignored_patterns=self._ignored_patterns,
-            ls_timeout=ls_timeout,
-            ls_specific_settings=ls_specific_settings,
-            trace_lsp_communication=trace_lsp_communication,
-        )
-        self.language_server_manager = LanguageServerManager.from_languages(self.project_config.languages, factory)
-        return self.language_server_manager
-
     def add_language(self, language: Language) -> None:
         """
-        Adds a new programming language to the project configuration, starting the corresponding
-        language server instance if the LS manager is active.
+        Adds a new programming language to the project configuration.
         The project configuration is saved to disk after adding the language.
 
         :param language: the programming language to add
@@ -459,21 +378,13 @@ class Project(ToStringMixin):
             log.info(f"Language {language.value} is already present in the project configuration.")
             return
 
-        # start the language server (if the LS manager is active)
-        if self.language_server_manager is None:
-            log.info("Language server manager is not active; skipping language server startup for the new language.")
-        else:
-            log.info("Adding and starting the language server for new language %s ...", language.value)
-            self.language_server_manager.add_language_server(language)
-
         # update the project configuration
         self.project_config.languages.append(language)
         self.save_config()
 
     def remove_language(self, language: Language) -> None:
         """
-        Removes a programming language from the project configuration, stopping the corresponding
-        language server instance if the LS manager is active.
+        Removes a programming language from the project configuration.
         The project configuration is saved to disk after removing the language.
 
         :param language: the programming language to remove
@@ -485,17 +396,6 @@ class Project(ToStringMixin):
         self.project_config.languages.remove(language)
         self.save_config()
 
-        # stop the language server (if the LS manager is active)
-        if self.language_server_manager is None:
-            log.info("Language server manager is not active; skipping language server shutdown for the removed language.")
-        else:
-            log.info("Removing and stopping the language server for language %s ...", language.value)
-            self.language_server_manager.remove_language_server(language)
-
     def shutdown(self, timeout: float = 2.0) -> None:
-        if self.language_server_manager is not None:
-            self.language_server_manager.stop_all(save_cache=True, timeout=timeout)
-            self.language_server_manager = None
-
-    # Alias for backward compatibility - agent.py and cli.py call this method name
-    create_language_server_manager = create_language_server
+        del timeout
+        return

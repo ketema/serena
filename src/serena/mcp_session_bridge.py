@@ -31,6 +31,7 @@ from contracts.mcp_session_bridge_contract import (
     REAPER_INTERVAL_SECONDS,
     MCPSessionBridgeContract,
 )
+from serena.session_context import set_current_session
 from serena.session_registry import SessionRegistry
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         # Clear any leftover ContextVar state from previous instances
         # Set to None without resetting - this is for test isolation
         _current_session_id.set(None)
+        set_current_session(None)
 
     # =========================================================================
     # LIFECYCLE HOOKS
@@ -129,6 +131,8 @@ class MCPSessionBridge(MCPSessionBridgeContract):
 
         # Set ContextVar and return token for reset
         token = _current_session_id.set(session_id)
+        session = self._session_registry.get_session(session_id)
+        set_current_session(session)
         return token
 
     def reset_session_context(
@@ -142,6 +146,7 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         POST: ContextVar restored
         """
         _current_session_id.reset(token)
+        set_current_session(None)
 
     def get_current_session_id(self) -> str | None:
         """

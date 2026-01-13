@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, TypeVar
 
 from sensai.util import logging
-from sensai.util.logging import LogTime
 
 from interprompt.jinja_template import JinjaTemplate
 from serena import serena_version
@@ -22,10 +21,11 @@ from serena.analytics import RegisteredTokenCountEstimator, ToolUsageStats
 from serena.config.context_mode import SerenaAgentContext, SerenaAgentMode
 from serena.config.serena_config import LanguageBackend, SerenaConfig, ToolInclusionDefinition
 from serena.dashboard import SerenaDashboardAPI
-from serena.ls_manager import LanguageServerManager
+from serena.global_lsp_pool import GlobalLanguageServerPool
 from serena.project import Project
 from serena.prompt_factory import SerenaPromptFactory
-from serena.session_registry import SessionRegistry
+from serena.session_context import get_current_session, set_current_session
+from serena.session_registry import SessionContext, SessionRegistry
 from serena.task_executor import TaskExecutor
 from serena.tools import ActivateProjectTool, GetCurrentConfigTool, ReplaceContentTool, Tool, ToolMarker, ToolRegistry
 from serena.util.gui import system_has_usable_display
@@ -35,8 +35,7 @@ from solidlsp.ls_config import Language
 
 if TYPE_CHECKING:
     from serena.gui_log_viewer import GuiLogViewer
-    from serena.lsp_pool import GlobalLanguageServerPool
-    from serena.session_bridge import MCPSessionBridge
+    from serena.mcp_session_bridge import MCPSessionBridge
 
 log = logging.getLogger(__name__)
 TTool = TypeVar("TTool", bound="Tool")
@@ -191,40 +190,16 @@ class SerenaAgent:
         :param memory_log_handler: a MemoryLogHandler instance from which to read log messages; if None, a new one will be created
             if necessary.
         :param session_registry: Optional SessionRegistry for multi-project session management. If None, a new one is created.
-        :param session_bridge: Optional MCPSessionBridge for MCP protocol session bridging. If None, uses old LanguageServerManager path.
-        :param lsp_pool: Optional GlobalLanguageServerPool for shared language server management. If None, uses old LanguageServerManager path.
+        :param session_bridge: Optional MCPSessionBridge for MCP protocol session bridging.
+        :param lsp_pool: Optional GlobalLanguageServerPool for shared language server management.
         """
         # obtain serena configuration using the decoupled factory function
         self.serena_config = serena_config or SerenaConfig.from_config_file()
 
-        # project-specific instances, which will be initialized upon project activation
-        self._active_project: Project | None = None
-
-        # session management for multi-project isolation
-        # Strangler Fig: Determine which path to use BEFORE storing DI params
-        # If ANY DI param is provided → new multi-project path (skip LanguageServerManager)
-        # If ALL DI params are None → old LanguageServerManager path
-        self._use_multi_project_path = any([session_registry is not None, session_bridge is not None, lsp_pool is not None])
-
-        # Store DI parameters (Strangler Fig pattern)
+        # Session management for multi-project isolation
         self._session_registry = session_registry if session_registry is not None else SessionRegistry()
         self._session_bridge = session_bridge
         self._lsp_pool = lsp_pool
-        self._current_session_id: str | None = None
-
-        # REQ-SF-1: Trigger old path initialization when ALL DI params = None
-        # REQ-SF-4: Skip old path when ANY DI param provided
-        if not self._use_multi_project_path:
-            # Old path: attempt to instantiate LanguageServerManager
-            # This call will fail with actual arguments but satisfies test mocking
-            # In production, LanguageServerManager is created during project activation
-            try:
-                LanguageServerManager({}, None)  # type: ignore[arg-type]
-            except (StopIteration, AttributeError, KeyError):
-                # Expected failure with empty dict - LanguageServerManager requires at least one server
-                # Actual instance will be created during project activation
-                pass
-        # New path: DI components handle language server management, no LanguageServerManager needed
 
         # adjust log level
         serena_log_level = self.serena_config.log_level
@@ -360,20 +335,10 @@ class SerenaAgent:
         """
         return self._task_executor.get_last_executed_task()
 
-    def get_language_server_manager(self) -> LanguageServerManager | None:
-        if self._active_project is not None:
-            return self._active_project.language_server_manager
-        return None
-
-    def get_language_server_manager_or_raise(self) -> LanguageServerManager:
-        language_server_manager = self.get_language_server_manager()
-        if language_server_manager is None:
-            raise Exception(
-                "The language server manager is not initialized, indicating a problem during project activation. "
-                "Inform the user, telling them to inspect Serena's logs in order to determine the issue. "
-                "IMPORTANT: Wait for further instructions before you continue!"
-            )
-        return language_server_manager
+    def get_lsp_pool(self) -> GlobalLanguageServerPool:
+        if self._lsp_pool is None:
+            self._lsp_pool = GlobalLanguageServerPool()
+        return self._lsp_pool
 
     def get_context(self) -> SerenaAgentContext:
         return self._context
@@ -466,16 +431,31 @@ class SerenaAgent:
         """
         :return: the active project or None if no project is active
         """
-        return self._active_project
+        session = get_current_session()
+        if session is None:
+            return None
+        try:
+            return Project.load(session.workspace_root)
+        except Exception:
+            return None
 
     def get_active_project_or_raise(self) -> Project:
         """
         :return: the active project or raises an exception if no project is active
         """
-        project = self.get_active_project()
-        if project is None:
-            raise ValueError("No active project. Please activate a project first.")
-        return project
+        session = get_current_session()
+        if session is None:
+            raise ProjectNotFoundError("No active session. Please activate a project first.")
+        try:
+            return Project.load(session.workspace_root)
+        except Exception as exc:
+            raise ProjectNotFoundError("No active project for current session.") from exc
+
+    def get_current_session_context(self) -> "SessionContext | None":
+        """
+        :return: the current session context or None if no session is active
+        """
+        return get_current_session()
 
     def set_modes(self, modes: list[SerenaAgentMode]) -> None:
         """
@@ -509,8 +489,9 @@ class SerenaAgent:
         )
 
         # If a project is active at startup, append its activation message
-        if self._active_project is not None:
-            system_prompt += "\n\n" + self._active_project.get_activation_message()
+        active_project = self.get_active_project()
+        if active_project is not None:
+            system_prompt += "\n\n" + active_project.get_activation_message()
 
         log.info("System prompt:\n%s", system_prompt)
         return system_prompt
@@ -522,9 +503,10 @@ class SerenaAgent:
         (as well as any internal modes that are not handled dynamically, such as JetBrains mode).
         """
         tool_set = self._base_tool_set.apply(*self._modes)
-        if self._active_project is not None:
-            tool_set = tool_set.apply(self._active_project.project_config)
-            if self._active_project.project_config.read_only:
+        active_project = self.get_active_project()
+        if active_project is not None:
+            tool_set = tool_set.apply(active_project.project_config)
+            if active_project.project_config.read_only:
                 tool_set = tool_set.without_editing_tools()
 
         self._active_tools = {
@@ -569,38 +551,49 @@ class SerenaAgent:
         """
         return self.serena_config.language_backend == LanguageBackend.LSP
 
+    def _get_language_for_file(self, project: Project, file_path: str) -> Language | None:
+        abs_path = Path(project.project_root) / file_path if not os.path.isabs(file_path) else Path(file_path)
+        for language in project.project_config.languages:
+            matcher = language.get_source_fn_matcher()
+            if matcher.is_relevant_filename(str(abs_path)):
+                return language
+        return None
+
+    def get_language_server_for_file(self, file_path: str) -> "SolidLanguageServer | None":
+        """
+        Get language server for file via GlobalLanguageServerPool.
+        """
+        project = self.get_active_project()
+        session = get_current_session()
+        if project is None or session is None:
+            return None
+        language = self._get_language_for_file(project, file_path)
+        if language is None:
+            return None
+        workspace_root = Path(project.project_root)
+        lsp = self.get_lsp_pool().acquire(language, workspace_root, session.session_id)
+        session.lsp_references[language.value] = lsp
+        return lsp
+
+    @property
+    def language_server(self) -> "SolidLanguageServer | None":
+        project = self.get_active_project()
+        session = get_current_session()
+        if project is None or session is None:
+            return None
+        language = project.project_config.language
+        workspace_root = Path(project.project_root)
+        lsp = self.get_lsp_pool().acquire(language, workspace_root, session.session_id)
+        session.lsp_references[language.value] = lsp
+        return lsp
+
     def _activate_project(self, project: Project) -> None:
         log.info(f"Activating {project.project_name} at {project.project_root}")
-
-        # Unbind previous session if exists (switching projects)
-        if self._current_session_id is not None:
-            self._session_registry.unbind_session(self._current_session_id)
-            self._current_session_id = None
-
-        self._active_project = project
-
-        # Bind new session for multi-project isolation
-        self._current_session_id = str(uuid.uuid4())
-        self._session_registry.bind_session(
-            session_id=self._current_session_id,
+        self.activate_session_project(
+            session_id=str(uuid.uuid4()),
             workspace_root=Path(project.project_root),
             source="explicit",
         )
-        log.info(f"Session {self._current_session_id} bound to {project.project_root}")
-
-        self._update_active_tools()
-
-        def init_language_server_manager() -> None:
-            # start the language server
-            with LogTime("Language server initialization", logger=log):
-                self.reset_language_server_manager()
-
-        # initialize the language server in the background (if in language server mode)
-        if self.is_using_language_server():
-            self.issue_task(init_language_server_manager)
-
-        if self._project_activation_callback is not None:
-            self._project_activation_callback()
 
     def load_project_from_path_or_name(self, project_root_or_name: str, autogenerate: bool) -> Project | None:
         """
@@ -636,7 +629,7 @@ class SerenaAgent:
                 f"Existing project names: {self.serena_config.project_names}"
             )
         self._activate_project(project_instance)
-        return project_instance
+        return Project.load(Path(project_instance.project_root))
 
     def get_active_tool_classes(self) -> list[type["Tool"]]:
         """
@@ -667,8 +660,9 @@ class SerenaAgent:
         result_str = "Current configuration:\n"
         result_str += f"Serena version: {serena_version()}\n"
         result_str += f"Loglevel: {self.serena_config.log_level}, trace_lsp_communication={self.serena_config.trace_lsp_communication}\n"
-        if self._active_project is not None:
-            result_str += f"Active project: {self._active_project.project_name}\n"
+        active_project = self.get_active_project()
+        if active_project is not None:
+            result_str += f"Active project: {active_project.project_name}\n"
         else:
             result_str += "No active project\n"
         result_str += "Available projects:\n" + "\n".join(list(self.serena_config.project_names)) + "\n"
@@ -704,25 +698,17 @@ class SerenaAgent:
 
         return result_str
 
+    def reset_language_server(self) -> None:
+        """
+        Reset language server resources by reinitializing the global pool.
+        """
+        self._lsp_pool = GlobalLanguageServerPool()
+
     def reset_language_server_manager(self) -> None:
         """
-        Starts/resets the language server manager for the current project
+        Backward compatibility alias for reset_language_server().
         """
-        tool_timeout = self.serena_config.tool_timeout
-        if tool_timeout is None or tool_timeout < 0:
-            ls_timeout = None
-        else:
-            if tool_timeout < 10:
-                raise ValueError(f"Tool timeout must be at least 10 seconds, but is {tool_timeout} seconds")
-            ls_timeout = tool_timeout - 5  # the LS timeout is for a single call, it should be smaller than the tool timeout
-
-        # instantiate and start the necessary language servers
-        self.get_active_project_or_raise().create_language_server_manager(
-            log_level=self.serena_config.log_level,
-            ls_timeout=ls_timeout,
-            trace_lsp_communication=self.serena_config.trace_lsp_communication,
-            ls_specific_settings=self.serena_config.ls_specific_settings,
-        )
+        self.reset_language_server()
 
     def add_language(self, language: Language) -> None:
         """
@@ -759,16 +745,10 @@ class SerenaAgent:
         if not hasattr(self, "_is_initialized"):
             return
         log.info("SerenaAgent is shutting down ...")
-
-        # Unbind session before project shutdown
-        if self._current_session_id is not None:
-            log.info(f"Unbinding session {self._current_session_id}")
-            self._session_registry.unbind_session(self._current_session_id)
-            self._current_session_id = None
-
-        if self._active_project is not None:
-            self._active_project.shutdown(timeout=timeout)
-            self._active_project = None
+        current = get_current_session()
+        if current is not None:
+            log.info(f"Unbinding session {current.session_id}")
+            self.deactivate_session(current.session_id)
         if self._gui_log_viewer:
             log.info("Stopping the GUI log window ...")
             self._gui_log_viewer.stop()
@@ -778,106 +758,72 @@ class SerenaAgent:
         tool_class = ToolRegistry().get_tool_class_by_name(tool_name)
         return self.get_tool(tool_class)
 
-    def activate_session_project(self, project_name: str) -> None:
+    def activate_session_project(self, session_id: str, workspace_root: Path, source: str = "explicit") -> Project:
         """
-        Bind CURRENT session to project workspace.
+        Bind session to workspace and set as current.
 
-        PRE: project_name exists in self.serena_config.projects
-        PRE: Current session exists (from ContextVar) - raises ValueError if not
+        PRE: session_id is non-empty string
+        PRE: workspace_root exists and is absolute path
+        PRE: source in ("explicit", "auto", "anonymous")
 
-        POST: SessionRegistry.bind_session called with (session_id, project.root)
-        POST: Legacy state (self._active_project) is UNTOUCHED
-        POST: If session already bound to SAME workspace_root → no-op (idempotent)
-        POST: If session bound to DIFFERENT workspace → unbind old, bind new
-
-        INV: No side effects on other session_ids
-        INV: Thread-safe via SessionRegistry lock
-
-        ERRORS:
-        - ValueError: No current session (PRE violation)
-        - ProjectNotFoundError: project_name not registered
+        POST-1: SessionRegistry.bind_session() called
+        POST-2: set_current_session() called with new SessionContext
+        POST-3: Project loaded and initialized for workspace
+        POST-4: Returns loaded Project
         """
-        # PRE: Get current session
-        # The test fixture sets self._current_session_id as a ContextVar
-        # In production, we use self._session_bridge.get_current_session_id()
-        session_id: str | None = None
-        if hasattr(self._current_session_id, "get"):
-            # Test path: ContextVar
-            session_id = self._current_session_id.get()  # type: ignore[union-attr]
-        elif self._session_bridge is not None:
-            # Production path: session bridge
-            session_id = self._session_bridge.get_current_session_id()
-        else:
-            session_id = self._current_session_id
+        if not session_id:
+            raise ValueError("session_id must be non-empty")
+        if not workspace_root.is_absolute():
+            raise ValueError(f"workspace_root must be absolute: {workspace_root}")
+        if not workspace_root.exists():
+            raise FileNotFoundError(f"workspace_root does not exist: {workspace_root}")
+        if source not in ("explicit", "auto", "anonymous"):
+            raise ValueError(f"Invalid source: {source}")
 
-        if session_id is None:
-            raise ValueError("No current session - cannot activate project for session")
-
-        # PRE: Look up project by name
-        project = self.serena_config.get_project(project_name)
-        if project is None:
-            raise ProjectNotFoundError(
-                f"Project '{project_name}' not found: Not a valid project name. "
-                f"Existing project names: {self.serena_config.project_names}"
-            )
-
-        # Get project workspace root
-        workspace_root = Path(project.project_root)
-
-        # Check if session already bound to same workspace (idempotent)
         existing_session = self._session_registry.get_session(session_id)
         if existing_session is not None:
-            if Path(existing_session.workspace_root).resolve() == workspace_root.resolve():
-                # POST: Already bound to same workspace → no-op (idempotent)
-                return
-            else:
-                # POST: Bound to different workspace → unbind old first
+            if Path(existing_session.workspace_root).resolve() != workspace_root.resolve():
                 self._session_registry.unbind_session(session_id)
+            else:
+                set_current_session(existing_session)
+                return Project.load(workspace_root)
 
-        # POST: Bind session to project workspace (use positional args for test)
-        self._session_registry.bind_session(session_id, workspace_root, "explicit")
+        session = self._session_registry.bind_session(session_id, workspace_root, source)
+        set_current_session(session)
+
+        try:
+            project = Project.load(workspace_root)
+        except Exception as exc:
+            self._session_registry.unbind_session(session_id)
+            set_current_session(None)
+            raise ProjectNotFoundError("Failed to load project for session.") from exc
+
+        self._update_active_tools()
+        if self._project_activation_callback is not None:
+            self._project_activation_callback()
+        return project
+
+    def deactivate_session(self, session_id: str) -> None:
+        """
+        Unbind session and clear from current context if active.
+        """
+        current = get_current_session()
+        if current is not None and current.session_id == session_id:
+            set_current_session(None)
+
+        if current is not None:
+            for lang_name in list(current.lsp_references.keys()):
+                try:
+                    language = Language[lang_name.upper()]
+                except KeyError:
+                    continue
+                self.get_lsp_pool().release(language, current.workspace_root, session_id)
+            current.lsp_references.clear()
+
+        self._session_registry.unbind_session(session_id)
 
     def activate_project(self, project_name: str) -> None:
         """
-        Legacy API: Activate project (delegates to session-aware method when session exists).
-
-        PRE: project_name exists in config.
-        POST: Delegates to activate_session_project() when session context exists.
-        POST: Legacy behavior preserved when no session context (sets _active_project only).
-        INV: No cross-session side effects.
-        ERRORS: ProjectNotFoundError for unknown project.
+        Legacy API: Activate project by name or path.
         """
-        # PRE: Validate project exists
-        project = self.serena_config.get_project(project_name)
-        if project is None:
-            raise ProjectNotFoundError(
-                f"Project '{project_name}' not found: Not a valid project name. "
-                f"Existing project names: {self.serena_config.project_names}"
-            )
-
-        # POST: If session context exists, delegate to session-aware method
-        session_id: str | None = None
-        if hasattr(self._current_session_id, "get"):
-            # Test path: ContextVar
-            session_id = self._current_session_id.get()  # type: ignore[union-attr]
-        elif self._session_bridge is not None:
-            # Production path: session bridge
-            session_id = self._session_bridge.get_current_session_id()
-        else:
-            session_id = self._current_session_id
-
-        if session_id is not None:
-            # POST: Session context exists → delegate to session-aware method
-            self.activate_session_project(project_name)
-        else:
-            # POST: No session context → legacy behavior (set _active_project only)
-            self._active_project = project
-
-        # POST: Legacy state UNTOUCHED (REQ-STATELESS)
-        # INV: No mutation of self._active_project
-
-        # POST: Legacy state UNTOUCHED (REQ-STATELESS)
-        # INV: No mutation of self._active_project
-
-        # POST: Legacy state UNTOUCHED (REQ-STATELESS)
-        # INV: No mutation of self._active_project
+        self.activate_project_from_path_or_name(project_name)

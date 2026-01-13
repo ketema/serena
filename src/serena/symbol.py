@@ -12,7 +12,7 @@ from solidlsp import SolidLanguageServer
 from solidlsp.ls import ReferenceInSymbol as LSPReferenceInSymbol
 from solidlsp.ls_types import Position, SymbolKind, UnifiedSymbolInformation
 
-from .ls_manager import LanguageServerManager
+from serena.session_context import get_current_session
 from .project import Project
 
 if TYPE_CHECKING:
@@ -482,25 +482,40 @@ class ReferenceInLanguageServerSymbol(ToStringMixin):
 
 
 class LanguageServerSymbolRetriever:
-    def __init__(self, ls: SolidLanguageServer | LanguageServerManager, agent: Union["SerenaAgent", None] = None) -> None:
+    def __init__(self, agent: "SerenaAgent", language_server: SolidLanguageServer | None = None) -> None:
         """
-        :param ls: the language server or language server manager to use for symbol retrieval and editing operations.
-        :param agent: the agent to use (only needed for marking files as modified). You can pass None if you don't
-            need an agent to be aware of file modifications performed by the symbol manager.
+        :param agent: the agent providing session context and LSP access.
+        :param language_server: optional explicit LSP instance to use.
         """
-        if isinstance(ls, SolidLanguageServer):
-            ls_manager = LanguageServerManager({ls.language: ls})
-        else:
-            ls_manager = ls
-        assert isinstance(ls_manager, LanguageServerManager)
-        self._ls_manager: LanguageServerManager = ls_manager
+        self._explicit_language_server = language_server
         self.agent = agent
 
     def get_root_path(self) -> str:
-        return self._ls_manager.get_root_path()
+        if self._explicit_language_server is not None:
+            return self._explicit_language_server.repository_root_path
+        return self.agent.get_active_project_or_raise().project_root
 
     def get_language_server(self, relative_path: str) -> SolidLanguageServer:
-        return self._ls_manager.get_language_server(relative_path)
+        if self._explicit_language_server is not None:
+            return self._explicit_language_server
+        lsp = self.agent.get_language_server_for_file(relative_path)
+        if lsp is None:
+            raise ValueError(f"No language server available for {relative_path}")
+        return lsp
+
+    def _iter_language_servers(self) -> list[SolidLanguageServer]:
+        if self._explicit_language_server is not None:
+            return [self._explicit_language_server]
+        session = get_current_session()
+        if session is None:
+            raise ValueError("No active session for language server iteration")
+        project = self.agent.get_active_project_or_raise()
+        servers: list[SolidLanguageServer] = []
+        for language in project.project_config.languages:
+            lsp = self.agent.get_lsp_pool().acquire(language, Path(project.project_root), session.session_id)
+            session.lsp_references[language.value] = lsp
+            servers.append(lsp)
+        return servers
 
     def find(
         self,
@@ -515,7 +530,7 @@ class LanguageServerSymbolRetriever:
         optionally limited to a specific file and filtered by kind.
         """
         symbols: list[LanguageServerSymbol] = []
-        for lang_server in self._ls_manager.iter_language_servers():
+        for lang_server in self._iter_language_servers():
             symbol_roots = lang_server.request_full_symbol_tree(within_relative_path=within_relative_path)
             for root in symbol_roots:
                 symbols.extend(

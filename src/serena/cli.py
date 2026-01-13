@@ -27,6 +27,7 @@ from serena.constants import (
     SERENAS_OWN_CONTEXT_YAMLS_DIR,
     SERENAS_OWN_MODE_YAMLS_DIR,
 )
+from serena.global_lsp_pool import GlobalLanguageServerPool
 from serena.mcp import SerenaMCPFactory
 from serena.project import Project
 from serena.tools import FindReferencingSymbolsTool, FindSymbolTool, GetSymbolsOverviewTool, SearchForPatternTool, ToolRegistry
@@ -582,12 +583,20 @@ class ProjectCommands(AutoRegisteringGroup):
     def _index_project(project: str, log_level: str, timeout: float) -> None:
         lvl = logging.getLevelNamesMapping()[log_level.upper()]
         logging.configure(level=lvl)
-        serena_config = SerenaConfig.from_config_file()
         proj = Project.load(os.path.abspath(project))
         click.echo(f"Indexing symbols in project {project} …")
-        ls_mgr = proj.create_language_server_manager(
-            log_level=lvl, ls_timeout=timeout, ls_specific_settings=serena_config.ls_specific_settings
-        )
+        lsp_pool = GlobalLanguageServerPool()
+        session_id = "cli-indexer"
+
+        def get_language_for_file(file_path: str) -> Language | None:
+            abs_path = Path(proj.project_root) / file_path if not os.path.isabs(file_path) else Path(file_path)
+            for language in proj.project_config.languages:
+                matcher = language.get_source_fn_matcher()
+                if matcher.is_relevant_filename(str(abs_path)):
+                    return language
+            return None
+
+        acquired_languages: set[Language] = set()
         try:
             log_file = os.path.join(project, ".serena", "logs", "indexing.txt")
 
@@ -598,18 +607,28 @@ class ProjectCommands(AutoRegisteringGroup):
             language_file_counts: dict[Language, int] = collections.defaultdict(lambda: 0)
             for i, f in enumerate(tqdm(files, desc="Indexing")):
                 try:
-                    ls = ls_mgr.get_language_server(f)
-                    ls.request_document_symbols(f)
-                    language_file_counts[ls.language] += 1
+                    language = get_language_for_file(f)
+                    if language is None:
+                        continue
+                    lsp = lsp_pool.acquire(language, Path(proj.project_root), session_id)
+                    acquired_languages.add(language)
+                    lsp.request_document_symbols(f)
+                    language_file_counts[language] += 1
                 except Exception as e:
                     log.error(f"Failed to index {f}, continuing.")
                     collected_exceptions.append(e)
                     files_failed.append(f)
                 if (i + 1) % 10 == 0:
-                    ls_mgr.save_all_caches()
+                    for language in list(acquired_languages):
+                        lsp = lsp_pool.get_lsp(language, Path(proj.project_root))
+                        if lsp is not None:
+                            lsp.save_cache()
             reported_language_file_counts = {k.value: v for k, v in language_file_counts.items()}
             click.echo(f"Indexed files per language: {dict_string(reported_language_file_counts, brackets=None)}")
-            ls_mgr.save_all_caches()
+            for language in list(acquired_languages):
+                lsp = lsp_pool.get_lsp(language, Path(proj.project_root))
+                if lsp is not None:
+                    lsp.save_cache()
 
             if len(files_failed) > 0:
                 os.makedirs(os.path.dirname(log_file), exist_ok=True)
@@ -619,7 +638,9 @@ class ProjectCommands(AutoRegisteringGroup):
                         f.write(f"{exception}\n")
                 click.echo(f"Failed to index {len(files_failed)} files, see:\n{log_file}")
         finally:
-            ls_mgr.stop_all()
+            for language in list(acquired_languages):
+                lsp_pool.release(language, Path(proj.project_root), session_id)
+            lsp_pool.stop_all(save_cache=True)
 
     @staticmethod
     @click.command("is_ignored_path", help="Check if a path is ignored by the project configuration.")
@@ -656,20 +677,35 @@ class ProjectCommands(AutoRegisteringGroup):
         if proj.is_ignored_path(file, ignore_non_source_files=True):
             click.echo(f"'{file}' is ignored or declared as non-code file by the project configuration, won't index.")
             exit(1)
-        ls_mgr = proj.create_language_server_manager()
+        lsp_pool = GlobalLanguageServerPool()
+        session_id = "cli-indexer"
+
+        def get_language_for_file(file_path: str) -> Language | None:
+            abs_path = Path(proj.project_root) / file_path if not os.path.isabs(file_path) else Path(file_path)
+            for language in proj.project_config.languages:
+                matcher = language.get_source_fn_matcher()
+                if matcher.is_relevant_filename(str(abs_path)):
+                    return language
+            return None
+
+        language = get_language_for_file(file)
+        if language is None:
+            click.echo(f"No language detected for '{file}', skipping.")
+            exit(1)
         try:
-            for ls in ls_mgr.iter_language_servers():
-                click.echo(f"Indexing for language {ls.language.value} …")
-                document_symbols = ls.request_document_symbols(file)
-                symbols, _ = document_symbols.get_all_symbols_and_roots()
-                if verbose:
-                    click.echo(f"Symbols in file '{file}':")
-                    for symbol in symbols:
-                        click.echo(f"  - {symbol['name']} at line {symbol['selectionRange']['start']['line']} of kind {symbol['kind']}")
-                ls.save_cache()
-                click.echo(f"Successfully indexed file '{file}', {len(symbols)} symbols saved to cache in {ls.cache_dir}.")
+            lsp = lsp_pool.acquire(language, Path(proj.project_root), session_id)
+            click.echo(f"Indexing for language {language.value} …")
+            document_symbols = lsp.request_document_symbols(file)
+            symbols, _ = document_symbols.get_all_symbols_and_roots()
+            if verbose:
+                click.echo(f"Symbols in file '{file}':")
+                for symbol in symbols:
+                    click.echo(f"  - {symbol['name']} at line {symbol['selectionRange']['start']['line']} of kind {symbol['kind']}")
+            lsp.save_cache()
+            click.echo(f"Successfully indexed file '{file}', {len(symbols)} symbols saved to cache in {lsp.cache_dir}.")
         finally:
-            ls_mgr.stop_all()
+            lsp_pool.release(language, Path(proj.project_root), session_id)
+            lsp_pool.stop_all(save_cache=True)
 
     @staticmethod
     @click.command("health-check", help="Perform a comprehensive health check of the project's tools and language server.")
