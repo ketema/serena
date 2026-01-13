@@ -82,10 +82,9 @@ def set_current_session(session: Optional[Any]) -> None:
     2. Side Effect Prohibition: No I/O, no logging (ContextVar is internal state)
     3. Ordering Constraints: Must be called at request boundary (entry/exit)
     4. Resource Invariants: No file handles, no memory beyond ContextVar
-    5. Exception Safety: Never raises
+    5. Exception Safety: Never raises (ContextVar.set accepts Any)
 
-    ERRORS:
-    - ERRORS-1: TypeError if session is not SessionContext or None (type validation)
+    ERRORS: None (ContextVar.set() accepts any value, no type validation at runtime)
     """
     _current_session.set(session)
 

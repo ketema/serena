@@ -372,7 +372,7 @@ TEST_CASES = {
         },
         {
             "name": "test_languages_returns_strings_not_lsp",
-            "contract": "POST: Does NOT return LSP instances (config-only)",
+            "contract": "POST-3: Does NOT return LSP instances (config-only)",
             "setup": "project with languages configured",
             "assertion": "all(isinstance(lang, str) for lang in project.languages)",
             "guidance": "languages property returns strings, not LSP instances",
@@ -381,7 +381,7 @@ TEST_CASES = {
     "load": [
         {
             "name": "test_post_no_lsp_created_on_load",
-            "contract": "POST: NO LSP instances created (config-only)",
+            "contract": "POST-3: NO LSP instances created (config-only)",
             "setup": "Project.load(valid_path)",
             "assertion": "no LSP instances exist after load",
             "guidance": "Loading Project MUST NOT start any LSP processes",
@@ -390,13 +390,13 @@ TEST_CASES = {
     "path_validation": [
         {
             "name": "test_validate_relative_path_escapes",
-            "contract": "ERRORS: ValueError if path escapes project boundaries",
+            "contract": "ERRORS-1: ValueError if path escapes project boundaries",
             "input": "../../../etc/passwd",
             "assertion": "raises ValueError",
         },
         {
             "name": "test_is_path_in_project_returns_false_on_escape",
-            "contract": "POST: Returns False if path escapes via .. or symlink",
+            "contract": "POST-2: Returns False if path escapes via .. or symlink",
             "input": "Path('/etc/passwd')",
             "assertion": "returns False",
         },
