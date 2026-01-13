@@ -85,7 +85,7 @@ def set_current_session(session: Optional[Any]) -> None:
     5. Exception Safety: Never raises
 
     ERRORS:
-    - TypeError: if session is not SessionContext or None (type validation)
+    - ERRORS-1: TypeError if session is not SessionContext or None (type validation)
     """
     _current_session.set(session)
 
@@ -181,7 +181,7 @@ class SerenaAgentStatelessContract(Protocol):
         5. Exception Safety: Raises ProjectNotFoundError on failure (declared)
 
         ERRORS:
-        - ProjectNotFoundError: if no active session or no project at workspace
+        - ERRORS-1: ProjectNotFoundError if no active session or no project at workspace
         """
         ...
 
@@ -212,9 +212,9 @@ class SerenaAgentStatelessContract(Protocol):
         5. Exception Safety: On error, unbind session and clear ContextVar
 
         ERRORS:
-        - ValueError: if session_id empty
-        - FileNotFoundError: if workspace_root does not exist
-        - ProjectNotFoundError: if project cannot be loaded
+        - ERRORS-1: ValueError if session_id empty
+        - ERRORS-2: FileNotFoundError if workspace_root does not exist
+        - ERRORS-3: ProjectNotFoundError if project cannot be loaded
         """
         ...
 
@@ -296,7 +296,7 @@ TEST_CASES = {
             "contract": "POST-1: SessionRegistry.bind_session() called",
             "setup": "integration test with real SessionRegistry (CL10 compliant - no mock)",
             "assertion": "registry.get_session(session_id) returns SessionContext after activation",
-            "cl10_status": "COMPLIANT - integration test verifies POST via observable state",
+            "cl10_status": "N/A - integration test design, no mock required",
         },
         {
             "name": "test_post2_contextvar_set",
@@ -306,7 +306,7 @@ TEST_CASES = {
         },
         {
             "name": "test_exception_safety_unbinds",
-            "contract": "INV 5-point #5 (Exception Safety): On error, unbind session and clear ContextVar",
+            "contract": "INV (Exception Safety): On error, unbind session and clear ContextVar",
             "setup": "Project.load raises exception",
             "assertion": "session unbound, ContextVar is None",
         },
@@ -347,8 +347,8 @@ def verify_no_legacy_state(agent: Any) -> None:
     INV: agent unchanged
 
     ERRORS:
-    - AssertionError: if any prohibited field exists
-    - TypeError: if agent lacks __dict__ (non-inspectable object)
+    - ERRORS-1: AssertionError if any prohibited field exists
+    - ERRORS-2: TypeError if agent lacks __dict__ (non-inspectable object)
     """
     for field in PROHIBITED_FIELDS:
         assert not hasattr(agent, field), (
@@ -370,8 +370,8 @@ def verify_required_dependencies(agent: Any) -> None:
     INV: agent unchanged
 
     ERRORS:
-    - AssertionError: if any required dependency missing
-    - TypeError: if agent lacks __dict__ (non-inspectable object)
+    - ERRORS-1: AssertionError if any required dependency missing
+    - ERRORS-2: TypeError if agent lacks __dict__ (non-inspectable object)
     """
     for dep in REQUIRED_DEPENDENCIES:
         if dep == "_current_session":

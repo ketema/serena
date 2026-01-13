@@ -124,9 +124,9 @@ class ProjectConfigOnlyContract(Protocol):
 
         PRE: None (always callable after construction)
 
-        POST: Returns absolute Path to project root
-        POST: Path.exists() == True
-        POST: Path.is_dir() == True
+        POST-1: Returns absolute Path to project root
+        POST-2: Path.exists() == True
+        POST-3: Path.is_dir() == True
 
         INV (5-Point Checklist):
         1. State Invariance: No state modified (property read)
@@ -146,8 +146,8 @@ class ProjectConfigOnlyContract(Protocol):
 
         PRE: None (always callable)
 
-        POST: Returns non-empty string
-        POST: Default is project_root.name if not configured
+        POST-1: Returns non-empty string
+        POST-2: Default is project_root.name if not configured
 
         INV (5-Point Checklist):
         1. State Invariance: No state modified
@@ -167,9 +167,9 @@ class ProjectConfigOnlyContract(Protocol):
 
         PRE: None (always callable)
 
-        POST: Returns list of language strings (e.g., ["python", "rust"])
-        POST: May be empty list if no languages configured
-        POST: Does NOT return LSP instances (config-only)
+        POST-1: Returns list of language strings (e.g., ["python", "rust"])
+        POST-2: May be empty list if no languages configured
+        POST-3: Does NOT return LSP instances (config-only)
 
         INV (5-Point Checklist):
         1. State Invariance: No state modified
@@ -189,8 +189,8 @@ class ProjectConfigOnlyContract(Protocol):
 
         PRE: None (always callable)
 
-        POST: Returns ProjectConfig with all settings
-        POST: Includes ignored_paths, encoding, read_only, etc.
+        POST-1: Returns ProjectConfig with all settings
+        POST-2: Includes ignored_paths, encoding, read_only, etc.
 
         INV (5-Point Checklist):
         1. State Invariance: No state modified
@@ -211,9 +211,9 @@ class ProjectConfigOnlyContract(Protocol):
         PRE: project_root is absolute path
         PRE: project_root.exists() and project_root.is_dir()
 
-        POST: Returns Project with configuration loaded
-        POST: If autogenerate=True and no project.yml, creates default
-        POST: NO LSP instances created (config-only)
+        POST-1: Returns Project with configuration loaded
+        POST-2: If autogenerate=True and no project.yml, creates default
+        POST-3: NO LSP instances created (config-only)
 
         INV (5-Point Checklist):
         1. State Invariance: N/A (factory method)
@@ -224,9 +224,9 @@ class ProjectConfigOnlyContract(Protocol):
         5. Exception Safety: On error, no partial Project returned
 
         ERRORS:
-        - FileNotFoundError: if project_root does not exist
-        - ValueError: if project_root is not absolute
-        - yaml.YAMLError: if project.yml is malformed
+        - ERRORS-1: FileNotFoundError if project_root does not exist
+        - ERRORS-2: ValueError if project_root is not absolute
+        - ERRORS-3: yaml.YAMLError if project.yml is malformed
         """
         ...
 
@@ -236,8 +236,8 @@ class ProjectConfigOnlyContract(Protocol):
 
         PRE: None (always callable)
 
-        POST: Returns PathSpec object for filtering
-        POST: Matches patterns from project.yml ignored_paths
+        POST-1: Returns PathSpec object for filtering
+        POST-2: Matches patterns from project.yml ignored_paths
 
         INV (5-Point Checklist):
         1. State Invariance: No state modified
@@ -256,8 +256,8 @@ class ProjectConfigOnlyContract(Protocol):
 
         PRE: path is Path object (relative or absolute)
 
-        POST: Returns True if path matches ignore patterns
-        POST: Returns False otherwise
+        POST-1: Returns True if path matches ignore patterns
+        POST-2: Returns False otherwise
 
         INV (5-Point Checklist):
         1. State Invariance: No state modified
@@ -276,8 +276,8 @@ class ProjectConfigOnlyContract(Protocol):
 
         PRE: path is Path object
 
-        POST: Returns True if path is under project_root
-        POST: Returns False if path escapes via .. or symlink
+        POST-1: Returns True if path is under project_root
+        POST-2: Returns False if path escapes via .. or symlink
 
         INV (5-Point Checklist):
         1. State Invariance: No state modified
@@ -296,8 +296,8 @@ class ProjectConfigOnlyContract(Protocol):
 
         PRE: relative_path is string (may contain ..)
 
-        POST: Returns absolute Path if valid and within project
-        POST: Path is resolved (no symlink escapes)
+        POST-1: Returns absolute Path if valid and within project
+        POST-2: Path is resolved (no symlink escapes)
 
         INV (5-Point Checklist):
         1. State Invariance: No state modified
@@ -307,8 +307,8 @@ class ProjectConfigOnlyContract(Protocol):
         5. Exception Safety: Raises on invalid path (declared)
 
         ERRORS:
-        - ValueError: if path escapes project boundaries
-        - FileNotFoundError: if resolved path does not exist
+        - ERRORS-1: ValueError if path escapes project boundaries
+        - ERRORS-2: FileNotFoundError if resolved path does not exist
         """
         ...
 
@@ -322,9 +322,9 @@ class ProjectConfigOnlyContract(Protocol):
 
         PRE: extensions is None or list of strings (e.g., [".py", ".rs"])
 
-        POST: Returns list of absolute Paths to source files
-        POST: Excludes ignored paths
-        POST: Filters by extensions if provided
+        POST-1: Returns list of absolute Paths to source files
+        POST-2: Excludes ignored paths
+        POST-3: Filters by extensions if provided
 
         INV (5-Point Checklist):
         1. State Invariance: No state modified
@@ -417,8 +417,8 @@ def verify_no_lsp_lifecycle_methods(project: Any) -> None:
     INV: project unchanged
 
     ERRORS:
-    - AssertionError: if any prohibited method exists
-    - TypeError: if project lacks __dict__ (non-inspectable object)
+    - ERRORS-1: AssertionError if any prohibited method exists
+    - ERRORS-2: TypeError if project lacks __dict__ (non-inspectable object)
     """
     for method in PROHIBITED_LSP_METHODS:
         assert not hasattr(project, method), (
@@ -440,8 +440,8 @@ def verify_no_lsp_instances(project: Any) -> None:
     INV: project unchanged
 
     ERRORS:
-    - AssertionError: if any LSP instance found in project attributes
-    - TypeError: if project lacks __dict__ (non-inspectable object)
+    - ERRORS-1: AssertionError if any LSP instance found in project attributes
+    - ERRORS-2: TypeError if project lacks __dict__ (non-inspectable object)
     """
     lsp_type_names = [
         "SolidLanguageServer",
@@ -476,9 +476,9 @@ def verify_languages_are_strings(project: Any) -> None:
     INV: project unchanged
 
     ERRORS:
-    - AssertionError: if languages contains non-string values
-    - TypeError: if project lacks __dict__ (non-inspectable object)
-    - AttributeError: if project lacks languages property
+    - ERRORS-1: AssertionError if languages contains non-string values
+    - ERRORS-2: TypeError if project lacks __dict__ (non-inspectable object)
+    - ERRORS-3: AttributeError if project lacks languages property
     """
     languages = project.languages
     for i, lang in enumerate(languages):
