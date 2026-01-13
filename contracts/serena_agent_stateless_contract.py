@@ -149,7 +149,7 @@ class SerenaAgentStatelessContract(Protocol):
         INV (5-Point Checklist):
         1. State Invariance: No instance state modified (pure lookup)
         2. Side Effect Prohibition: May load Project from disk (declared side effect)
-        3. Ordering Constraints: Must have active session (returns None otherwise)
+        3. Ordering Constraints: None (no sequencing requirements, always callable)
         4. Resource Invariants: Project loading may allocate memory (normal operation)
         5. Exception Safety: Returns None on any error (graceful degradation)
 
@@ -175,7 +175,7 @@ class SerenaAgentStatelessContract(Protocol):
         INV (5-Point Checklist):
         1. State Invariance: No instance state modified
         2. Side Effect Prohibition: May load Project from disk (declared)
-        3. Ordering Constraints: Must have active session
+        3. Ordering Constraints: None (handles missing session by raising, not caller obligation)
         4. Resource Invariants: Normal Project loading
         5. Exception Safety: Raises ProjectNotFoundError on failure (declared)
 
@@ -277,28 +277,28 @@ TEST_CASES = {
     ],
     "get_active_project": [
         {
-            "name": "test_post_returns_project_from_session",
-            "contract": "POST: Returns Project if current session has bound workspace",
+            "name": "test_post1_returns_project_from_session",
+            "contract": "POST-1: Returns Project if current session has bound workspace",
             "setup": "activate_session_project with valid workspace",
             "assertion": "get_active_project() returns Project instance",
         },
         {
-            "name": "test_post_returns_none_without_session",
-            "contract": "POST: Returns None if no active session",
+            "name": "test_post2_returns_none_without_session",
+            "contract": "POST-2: Returns None if no active session",
             "setup": "no session activated",
             "assertion": "get_active_project() returns None",
         },
     ],
     "activate_session_project": [
         {
-            "name": "test_post_registry_bind_called",
-            "contract": "POST: SessionRegistry.bind_session() called",
+            "name": "test_post1_registry_bind_called",
+            "contract": "POST-1: SessionRegistry.bind_session() called",
             "setup": "mock SessionRegistry per session_registry_contract.py",
             "assertion": "bind_session called with session_id, workspace_root",
         },
         {
-            "name": "test_post_contextvar_set",
-            "contract": "POST: set_current_session() called with new SessionContext",
+            "name": "test_post2_contextvar_set",
+            "contract": "POST-2: set_current_session() called with new SessionContext",
             "setup": "activate_session_project",
             "assertion": "get_current_session() returns matching SessionContext",
         },
@@ -311,20 +311,20 @@ TEST_CASES = {
     ],
     "deactivate_session": [
         {
-            "name": "test_post_registry_unbind_called",
-            "contract": "POST: SessionRegistry.unbind_session() called",
+            "name": "test_post1_registry_unbind_called",
+            "contract": "POST-1: SessionRegistry.unbind_session() called",
             "setup": "activate then deactivate",
             "assertion": "unbind_session called",
         },
         {
-            "name": "test_post_contextvar_cleared_if_current",
-            "contract": "POST: If session_id was current session, set_current_session(None)",
+            "name": "test_post2_contextvar_cleared_if_current",
+            "contract": "POST-2: If session_id was current session, set_current_session(None)",
             "setup": "activate session, then deactivate same session",
             "assertion": "get_current_session() returns None",
         },
         {
-            "name": "test_errors_none_idempotent",
-            "contract": "ERRORS: None (never raises, idempotent)",
+            "name": "test_errors_idempotent",
+            "contract": "ERRORS-1: None raised (idempotent unbind)",
             "setup": "deactivate non-existent session",
             "assertion": "no exception raised",
         },
