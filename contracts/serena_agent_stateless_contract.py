@@ -347,6 +347,7 @@ def verify_no_legacy_state(agent: Any) -> None:
 
     ERRORS:
     - AssertionError: if any prohibited field exists
+    - TypeError: if agent lacks __dict__ (non-inspectable object)
     """
     for field in PROHIBITED_FIELDS:
         assert not hasattr(agent, field), (
@@ -369,6 +370,7 @@ def verify_required_dependencies(agent: Any) -> None:
 
     ERRORS:
     - AssertionError: if any required dependency missing
+    - TypeError: if agent lacks __dict__ (non-inspectable object)
     """
     for dep in REQUIRED_DEPENDENCIES:
         if dep == "_current_session":
