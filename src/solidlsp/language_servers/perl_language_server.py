@@ -100,6 +100,14 @@ class PerlLanguageServer(SolidLanguageServer):
         return "perl -MPerl::LanguageServer -e 'Perl::LanguageServer::run'"
 
     def __init__(self, config: LanguageServerConfig, repository_root_path: str, solidlsp_settings: SolidLSPSettings):
+        """
+        Initialize Perl Language Server.
+
+        PRE: config is valid LanguageServerConfig
+        PRE: repository_root_path exists
+        POST: _request_timeout == 60.0 (INV-PERL-01, POST-PERL-01)
+        INV: No side effects beyond initialization
+        """
         # Setup runtime dependencies before initializing
         perl_ls_cmd = self._setup_runtime_dependencies()
 
@@ -107,6 +115,11 @@ class PerlLanguageServer(SolidLanguageServer):
             config, repository_root_path, ProcessLaunchInfo(cmd=perl_ls_cmd, cwd=repository_root_path), "perl", solidlsp_settings
         )
         self.request_id = 0
+
+        # INV-PERL-01: Request timeout MUST be configured (never None)
+        # POST-PERL-01: Timeout MUST be 60.0 seconds
+        # Prevents infinite hang on cross-file operations (observed: 1:50:46 hang)
+        self.set_request_timeout(60.0)
 
     @staticmethod
     def _get_initialize_params(repository_absolute_path: str) -> InitializeParams:

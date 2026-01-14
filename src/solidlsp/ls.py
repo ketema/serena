@@ -235,7 +235,9 @@ class SolidLanguageServer(ABC):
         # (which, unfortunately, differs from the signature of the base class).
         # If this assumption is ever violated, we need branching logic here.
         ls = ls_class(config, repository_root_path, solidlsp_settings)  # type: ignore
-        ls.set_request_timeout(timeout)
+        # Only override timeout if explicitly provided; preserve subclass-configured timeouts
+        if timeout is not None:
+            ls.set_request_timeout(timeout)
         return ls
 
     def __init__(
