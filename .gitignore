@@ -261,3 +261,6 @@ zz-misc/
 vue-implementation/
 error_log_*.txt
 *.pkl
+
+# Ralph loop transient files
+.claude/ralph-loop*.md
