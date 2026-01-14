@@ -6,7 +6,7 @@ Focus: ContextVar session resolution, no legacy state, safe activation/deactivat
 """
 
 import logging
-from contextvars import copy_context
+from contextvars import Context
 from pathlib import Path
 
 import pytest
@@ -44,7 +44,19 @@ def workspace_root(tmp_path: Path) -> Path:
     return workspace
 
 
+@pytest.fixture(autouse=True)
+def _clear_session_context() -> None:
+    set_current_session(None)
+    yield
+    set_current_session(None)
+
+
 def test_inv1_no_active_project_field(serena_config: SerenaConfig, session_registry: SessionRegistry) -> None:
+    """
+    Contract: contracts/serena_agent_stateless_contract.py
+    Clause: INV-1 - NO _active_project field exists on SerenaAgent
+    Category: invariant
+    """
     agent = SerenaAgent(serena_config=serena_config, session_registry=session_registry)
     assert not hasattr(agent, "_active_project"), (
         "INV-1 violation: SerenaAgent has prohibited legacy field '_active_project'\n"
@@ -56,6 +68,11 @@ def test_inv1_no_active_project_field(serena_config: SerenaConfig, session_regis
 
 
 def test_inv2_no_current_session_id_field(serena_config: SerenaConfig, session_registry: SessionRegistry) -> None:
+    """
+    Contract: contracts/serena_agent_stateless_contract.py
+    Clause: INV-2 - NO _current_session_id field exists on SerenaAgent
+    Category: invariant
+    """
     agent = SerenaAgent(serena_config=serena_config, session_registry=session_registry)
     assert not hasattr(agent, "_current_session_id"), (
         "INV-2 violation: SerenaAgent has prohibited legacy field '_current_session_id'\n"
@@ -71,6 +88,11 @@ def test_inv3_session_via_contextvar(
     session_registry: SessionRegistry,
     workspace_root: Path,
 ) -> None:
+    """
+    Contract: contracts/serena_agent_stateless_contract.py
+    Clause: INV-3 - All session resolution via SessionRegistry + ContextVar
+    Category: invariant
+    """
     agent = SerenaAgent(serena_config=serena_config, session_registry=session_registry)
     session_id = "sess-1"
 
@@ -92,11 +114,16 @@ def test_inv5_request_scoped_binding_isolated_between_contexts(
     session_registry: SessionRegistry,
     workspace_root: Path,
 ) -> None:
+    """
+    Contract: contracts/serena_agent_stateless_contract.py
+    Clause: INV-5 - Request-scoped session binding (isolated per async context)
+    Category: invariant
+    """
     agent = SerenaAgent(serena_config=serena_config, session_registry=session_registry)
     session = session_registry.bind_session("sess-ctx", workspace_root, source="explicit")
     set_current_session(session)
 
-    other_context = copy_context()
+    other_context = Context()
     other_value = other_context.run(get_current_session)
 
     assert other_value is None, (
@@ -113,6 +140,11 @@ def test_get_active_project_returns_project_when_session_bound(
     session_registry: SessionRegistry,
     workspace_root: Path,
 ) -> None:
+    """
+    Contract: contracts/serena_agent_stateless_contract.py
+    Clause: get_active_project() POST-1 - Returns Project loaded from session workspace_root
+    Category: positive
+    """
     agent = SerenaAgent(serena_config=serena_config, session_registry=session_registry)
     session = session_registry.bind_session("sess-project", workspace_root, source="explicit")
     set_current_session(session)
@@ -131,6 +163,11 @@ def test_get_active_project_returns_none_without_session(
     serena_config: SerenaConfig,
     session_registry: SessionRegistry,
 ) -> None:
+    """
+    Contract: contracts/serena_agent_stateless_contract.py
+    Clause: get_active_project() POST-2 - Returns None if no session bound
+    Category: negative
+    """
     agent = SerenaAgent(serena_config=serena_config, session_registry=session_registry)
     assert agent.get_active_project() is None, (
         "POST-2 violation: get_active_project() must return None when no session\n"
@@ -145,6 +182,11 @@ def test_get_active_project_or_raise_raises_without_session(
     serena_config: SerenaConfig,
     session_registry: SessionRegistry,
 ) -> None:
+    """
+    Contract: contracts/serena_agent_stateless_contract.py
+    Clause: get_active_project_or_raise() ERRORS-1 - Raises ProjectNotFoundError if no session
+    Category: error
+    """
     agent = SerenaAgent(serena_config=serena_config, session_registry=session_registry)
     with pytest.raises(ProjectNotFoundError):
         agent.get_active_project_or_raise()
@@ -155,6 +197,11 @@ def test_activate_session_project_binds_and_sets_context(
     session_registry: SessionRegistry,
     workspace_root: Path,
 ) -> None:
+    """
+    Contract: contracts/serena_agent_stateless_contract.py
+    Clause: activate_session_project() POST-1, POST-2, POST-3 - Binds session, sets ContextVar, loads Project
+    Category: positive
+    """
     agent = SerenaAgent(serena_config=serena_config, session_registry=session_registry)
     session_id = "sess-activate"
 
@@ -189,6 +236,11 @@ def test_activate_session_project_exception_safety_unbinds_and_clears(
     workspace_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """
+    Contract: contracts/serena_agent_stateless_contract.py
+    Clause: activate_session_project() INV (Exception Safety) - Unbinds and clears on error
+    Category: error
+    """
     agent = SerenaAgent(serena_config=serena_config, session_registry=session_registry)
 
     def _raise_load(_: Path, autogenerate: bool = True):
@@ -220,6 +272,11 @@ def test_deactivate_session_unbinds_and_clears(
     session_registry: SessionRegistry,
     workspace_root: Path,
 ) -> None:
+    """
+    Contract: contracts/serena_agent_stateless_contract.py
+    Clause: deactivate_session() POST-1, POST-2 - Unbinds session and clears ContextVar
+    Category: positive
+    """
     agent = SerenaAgent(serena_config=serena_config, session_registry=session_registry)
     session = session_registry.bind_session("sess-deactivate", workspace_root, source="explicit")
     set_current_session(session)
@@ -246,5 +303,10 @@ def test_deactivate_session_idempotent_no_raise(
     serena_config: SerenaConfig,
     session_registry: SessionRegistry,
 ) -> None:
+    """
+    Contract: contracts/serena_agent_stateless_contract.py
+    Clause: deactivate_session() ERRORS: None - Idempotent, does not raise for non-existent session
+    Category: boundary
+    """
     agent = SerenaAgent(serena_config=serena_config, session_registry=session_registry)
     agent.deactivate_session("non-existent")
