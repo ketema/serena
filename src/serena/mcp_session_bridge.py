@@ -119,19 +119,25 @@ class MCPSessionBridge(MCPSessionBridgeContract):
     def set_session_context(
         self,
         session_id: str,
-    ) -> Token:
+    ) -> Token | None:
         """
         Set session context in ContextVar.
 
         PRE: session_id is non-empty string
-        POST: ContextVar set to session_id, token returned for reset
+        POST-4: If session found: ContextVar set, returns Token
+        POST-5: If session NOT found: ContextVar unchanged, returns None
         """
         if not session_id:
             raise ValueError("session_id must be non-empty")
 
-        # Set ContextVar and return token for reset
-        token = _current_session_id.set(session_id)
+        # Check if session exists in registry first (POST-5)
         session = self._session_registry.get_session(session_id)
+        if session is None:
+            # Session not found - don't modify ContextVar, return None
+            return None
+
+        # Session found - set ContextVar and return token for reset
+        token = _current_session_id.set(session_id)
         set_current_session(session)
         return token
 
@@ -236,9 +242,13 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         if not callable(func):
             raise ValueError("func must be callable")
         
-        # Set session context in ContextVar
+        # Set session context in ContextVar (may return None if session not found)
         token = self.set_session_context(session_id)
-        
+
+        # If session not found, fall back to direct execution without context
+        if token is None:
+            return func()
+
         # Create filter that injects session_id into all LogRecords
         class SessionFilter(logging.Filter):
             def filter(self, record: logging.LogRecord) -> bool:

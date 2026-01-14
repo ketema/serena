@@ -27,6 +27,7 @@ from serena.config.serena_config import LanguageBackend
 from serena.constants import DEFAULT_CONTEXT, DEFAULT_MODES, SERENA_LOG_FORMAT
 from serena.global_lsp_pool import GlobalLanguageServerPool
 from serena.mcp_session_bridge import MCPSessionBridge
+from serena.mcp_transport_context import get_transport_session_id
 from serena.session_registry import SessionRegistry
 from serena.tools import Tool
 from serena.util.exception import show_fatal_exception_safe
@@ -229,7 +230,19 @@ class SerenaMCPFactory:
                 properties["description"] = param_desc[0].upper() + param_desc[1:]
 
         def execute_fn(**kwargs) -> str:  # type: ignore
-            return tool.apply_ex(log_call=True, catch_exceptions=True, **kwargs)
+            # PRE-3: Read transport session ID (set by HTTP layer)
+            session_id = get_transport_session_id()
+            
+            # POST-1/POST-2: Restore session context if session ID present
+            if session_id and tool.agent._session_bridge:
+                # HTTP mode: wrap with session context restoration
+                return tool.agent._session_bridge.run_with_session_context(
+                    session_id,
+                    lambda: tool.apply_ex(log_call=True, catch_exceptions=True, **kwargs)
+                )
+            else:
+                # STDIO mode or no session: direct call
+                return tool.apply_ex(log_call=True, catch_exceptions=True, **kwargs)
 
         annotations = ToolAnnotations(readOnlyHint=not tool.can_edit())
 
