@@ -1,4 +1,5 @@
 import concurrent.futures
+import contextvars
 import threading
 import time
 from collections.abc import Callable
@@ -26,18 +27,27 @@ class TaskExecutor:
         self._task_executor_last_executed_task_info: TaskExecutor.TaskInfo | None = None
 
     class Task(ToStringMixin, Generic[T]):
-        def __init__(self, function: Callable[[], T], name: str, logged: bool = True, timeout: float | None = None):
+        def __init__(
+            self,
+            function: Callable[[], T],
+            name: str,
+            logged: bool = True,
+            timeout: float | None = None,
+            context: contextvars.Context | None = None,
+        ):
             """
             :param function: the function representing the task to execute
             :param name: the name of the task
             :param logged: whether to log management of the task; if False, only errors will be logged
             :param timeout: the maximum time to wait for task completion in seconds, or None to wait indefinitely
+            :param context: optional ContextVar snapshot to run the task within
             """
             self.name = name
             self.future: concurrent.futures.Future = concurrent.futures.Future()
             self.logged = logged
             self.timeout = timeout
             self._function = function
+            self._context = context
 
         def _tostring_includes(self) -> list[str]:
             return ["name"]
@@ -54,7 +64,10 @@ class TaskExecutor:
                             log.info(f"Task {self.name} was already completed/cancelled; skipping execution")
                         return
                     with LogTime(self.name, logger=log, enabled=self.logged):
-                        result = self._function()
+                        if self._context is None:
+                            result = self._function()
+                        else:
+                            result = self._context.run(self._function)
                         if not self.future.done():
                             self.future.set_result(result)
                 except Exception as e:
@@ -190,7 +203,8 @@ class TaskExecutor:
             task_name = f"{task_prefix_name}:{name or task.__name__}"
             if logged:
                 log.info(f"Scheduling {task_name}")
-            task_obj = self.Task(function=task, name=task_name, logged=logged, timeout=timeout)
+            task_context = contextvars.copy_context()
+            task_obj = self.Task(function=task, name=task_name, logged=logged, timeout=timeout, context=task_context)
             self._task_executor_queue.append(task_obj)
             return task_obj
 

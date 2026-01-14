@@ -71,9 +71,10 @@ class TestShowFatalExceptionSafe:
         test_exception = ValueError("Test error")
 
         # The import should never happen in headless mode
-        with patch("serena.gui_log_viewer.show_fatal_exception") as mock_show_gui:
+        mock_gui_module = Mock(show_fatal_exception=Mock())
+        with patch.dict("sys.modules", {"serena.gui_log_viewer": mock_gui_module}):
             show_fatal_exception_safe(test_exception)
-            mock_show_gui.assert_not_called()
+            mock_gui_module.show_fatal_exception.assert_not_called()
 
         # Verify debug log about skipping GUI
         mock_log.debug.assert_called_once_with("Skipping GUI error display in headless environment")
@@ -85,9 +86,10 @@ class TestShowFatalExceptionSafe:
         test_exception = ValueError("Test error")
 
         # Mock the GUI function
-        with patch("serena.gui_log_viewer.show_fatal_exception") as mock_show_gui:
+        mock_gui_module = Mock(show_fatal_exception=Mock())
+        with patch.dict("sys.modules", {"serena.gui_log_viewer": mock_gui_module}):
             show_fatal_exception_safe(test_exception)
-            mock_show_gui.assert_called_once_with(test_exception)
+            mock_gui_module.show_fatal_exception.assert_called_once_with(test_exception)
 
     @patch("serena.util.exception.is_headless_environment", return_value=False)
     @patch("serena.util.exception.log")
@@ -97,7 +99,8 @@ class TestShowFatalExceptionSafe:
         gui_error = ImportError("No module named 'tkinter'")
 
         # Mock the GUI function to raise an exception
-        with patch("serena.gui_log_viewer.show_fatal_exception", side_effect=gui_error):
+        mock_gui_module = Mock(show_fatal_exception=Mock(side_effect=gui_error))
+        with patch.dict("sys.modules", {"serena.gui_log_viewer": mock_gui_module}):
             show_fatal_exception_safe(test_exception)
 
         # Verify debug log about GUI failure

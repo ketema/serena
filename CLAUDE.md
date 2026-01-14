@@ -113,8 +113,15 @@ Follow `/test-driven-development` skill for RED→GREEN→COMMIT→REFACTOR.
 2. ↪ test-writer (RED) | 🚫 impl | ✓ req+TSR
 3. ↪ coder (GREEN) | 🚫 test-source | ✓ error-msgs
 4. 🔄 Iteration if fail (Decision Matrix below)
+4.5. ⛔ **EXECUTION GATE** (MANDATORY): Execute actual system, not just mocked tests. Capture stdout/stderr.
 5. ↪ constitutional-code-auditor
 6. AI Panel review → apply ALL feedback
+
+**Execution Gate (CL4 extension)**:
+- Ask: "Did I EXECUTE the system or just run mocked tests?"
+- By type: CLI→run binary | API→HTTP request | MCP→invoke tools | Library→REPL
+- Evidence: stdout/stderr from real invocation
+- ⛔ "Tests pass" ≠ execution evidence
 
 **Evidence**: `F:path:lines T:module::test=STATUS C:hash COV:%`
 

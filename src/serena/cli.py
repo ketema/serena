@@ -585,6 +585,8 @@ class ProjectCommands(AutoRegisteringGroup):
         logging.configure(level=lvl)
         proj = Project.load(os.path.abspath(project))
         click.echo(f"Indexing symbols in project {project} …")
+        cache_dir = os.path.join(project, ".serena", "cache")
+        os.makedirs(cache_dir, exist_ok=True)
         lsp_pool = GlobalLanguageServerPool()
         session_id = "cli-indexer"
 

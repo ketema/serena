@@ -4,15 +4,15 @@ import os
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Any, NotRequired, Self, TypedDict, Union
+from typing import TYPE_CHECKING, Any, NotRequired, Self, TypedDict
 
 from sensai.util.string import ToStringMixin
 
+from serena.session_context import get_current_session
 from solidlsp import SolidLanguageServer
 from solidlsp.ls import ReferenceInSymbol as LSPReferenceInSymbol
 from solidlsp.ls_types import Position, SymbolKind, UnifiedSymbolInformation
 
-from serena.session_context import get_current_session
 from .project import Project
 
 if TYPE_CHECKING:

@@ -123,7 +123,7 @@ class TestSerenaAgent:
     def test_find_symbol(self, serena_agent, symbol_name: str, expected_kind: str, expected_file: str):
         agent = serena_agent
         find_symbol_tool = agent.get_tool(FindSymbolTool)
-        result = find_symbol_tool.apply_ex(name_path_pattern=symbol_name)
+        result = find_symbol_tool.apply_ex(name_path=symbol_name)
 
         symbols = json.loads(result)
         assert any(
@@ -177,7 +177,7 @@ class TestSerenaAgent:
 
         # Find the symbol location first
         find_symbol_tool = agent.get_tool(FindSymbolTool)
-        result = find_symbol_tool.apply_ex(name_path_pattern=symbol_name, relative_path=def_file)
+        result = find_symbol_tool.apply_ex(name_path=symbol_name, relative_path=def_file)
 
         time.sleep(1)
         symbols = json.loads(result)
@@ -272,7 +272,7 @@ class TestSerenaAgent:
 
         find_symbol_tool = agent.get_tool(FindSymbolTool)
         result = find_symbol_tool.apply_ex(
-            name_path_pattern=name_path,
+            name_path=name_path,
             depth=0,
             relative_path=None,
             include_body=False,
@@ -316,7 +316,7 @@ class TestSerenaAgent:
 
         find_symbol_tool = agent.get_tool(FindSymbolTool)
         result = find_symbol_tool.apply_ex(
-            name_path_pattern=name_path,
+            name_path=name_path,
             depth=0,
             substring_matching=True,
         )
@@ -346,7 +346,7 @@ class TestSerenaAgent:
 
         find_symbol_tool = agent.get_tool(FindSymbolTool)
         result = find_symbol_tool.apply_ex(
-            name_path_pattern=name_path,
+            name_path=name_path,
             depth=0,
             substring_matching=False,
         )

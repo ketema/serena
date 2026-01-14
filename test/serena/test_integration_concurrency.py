@@ -387,7 +387,7 @@ languages:
         workspace = temp_projects["project_a"]["path"]
 
         # Initial state: no LSPs
-        initial_stats = pool.get_pool_stats()
+        initial_stats = pool.get_stats()
         initial_total = initial_stats.get("total_count", 0)
 
         assert initial_total == 0, (
@@ -422,7 +422,7 @@ languages:
             registry.unbind_session(session_id)
 
         # After cleanup: verify no zombie LSPs
-        final_stats = pool.get_pool_stats()
+        final_stats = pool.get_stats()
 
         # Note: Without actual LSP invocation, total should still be 0
         # This test verifies the lifecycle hook points exist
@@ -431,7 +431,7 @@ languages:
             f"REQ-INT-4 violated: Pool stats missing 'lsps' | "
             f"Expected: 'lsps' key in pool stats | "
             f"Actual: stats keys are {list(final_stats.keys())} | "
-            f"Guidance: get_pool_stats() MUST return lsps list for observability"
+            f"Guidance: get_stats() MUST return lsps list for observability"
         )
 
         assert "total_count" in final_stats, (
@@ -439,7 +439,7 @@ languages:
             f"REQ-INT-4 violated: Pool stats missing 'total_count' | "
             f"Expected: 'total_count' key in pool stats | "
             f"Actual: stats keys are {list(final_stats.keys())} | "
-            f"Guidance: get_pool_stats() MUST return total_count for observability"
+            f"Guidance: get_stats() MUST return total_count for observability"
         )
 
     def test_session_overview_under_load(self, registry, bridge, temp_projects):

@@ -586,7 +586,7 @@ def test_run_with_session_context_returns_function_result():
 # =============================================================================
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_start_reaper_creates_background_task():
     """
     TEST CASE: start_reaper() creates async task that runs periodically
@@ -626,7 +626,7 @@ async def test_start_reaper_creates_background_task():
     bridge.stop_reaper()
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_stop_reaper_cancels_background_task():
     """
     TEST CASE: stop_reaper() cancels async task created by start_reaper()

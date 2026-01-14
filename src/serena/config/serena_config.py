@@ -265,6 +265,14 @@ class ProjectConfig(ToolInclusionDefinition, ToStringMixin):
 
     @classmethod
     def _apply_defaults_to_dict(cls, data: TDict) -> TDict:
+        # Track raw presence for validation in _from_dict
+        data["_raw_has_language"] = "language" in data
+        data["_raw_has_languages"] = "languages" in data
+        if "language" in data:
+            data["_raw_language_value"] = data["language"]
+        if "languages" in data:
+            data["_raw_languages_value"] = data["languages"]
+
         # apply defaults for new fields
         data["languages"] = data.get("languages", [])
         data["ignored_paths"] = data.get("ignored_paths", [])
@@ -308,8 +316,8 @@ class ProjectConfig(ToolInclusionDefinition, ToStringMixin):
         project_name = data["project_name"]
 
         # Check for both 'language' and 'languages' specified (error)
-        has_language = "language" in data
-        has_languages = "languages" in data
+        has_language = data.get("_raw_has_language", "language" in data)
+        has_languages = data.get("_raw_has_languages", "languages" in data)
 
         if has_language and has_languages:
             raise ValueError(
@@ -332,7 +340,10 @@ class ProjectConfig(ToolInclusionDefinition, ToStringMixin):
 
         if has_language:
             # Single language (backward compatibility)
-            language_str = data["language"].lower()
+            language_value = data.get("language", data.get("_raw_language_value"))
+            if language_value is None:
+                raise ValueError(f"Project '{project_name}' specified 'language' but no value was provided")
+            language_str = str(language_value).lower()
             # Backward compatibility for deprecated 'javascript'
             if language_str == "javascript":
                 log.warning(f"Found deprecated project language `javascript` in project {project_name}, please change to `typescript`")

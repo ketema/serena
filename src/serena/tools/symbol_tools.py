@@ -145,9 +145,8 @@ class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
         parsed_exclude_kinds: Sequence[SymbolKind] | None = [SymbolKind(k) for k in exclude_kinds] if exclude_kinds else None
         # Route to correct LSP for polyglot projects (or None for cross-language search)
         symbol_retriever = self.create_language_server_symbol_retriever(file_path=relative_path if relative_path else None)
-        symbols = symbol_retriever.find_by_name(
+        symbols = symbol_retriever.find(
             name_path,
-            include_body=include_body,
             include_kinds=parsed_include_kinds,
             exclude_kinds=parsed_exclude_kinds,
             substring_matching=substring_matching,

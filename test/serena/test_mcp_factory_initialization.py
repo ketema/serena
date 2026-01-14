@@ -231,7 +231,7 @@ def test_services_initialized_in_lifespan():
         )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_async_lifespan_initializes_services():
     """
     Verify services are initialized when async lifespan context is entered.
