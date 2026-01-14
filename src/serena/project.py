@@ -111,6 +111,34 @@ class Project(ToStringMixin):
         """Returns all languages configured for this project."""
         return self.project_config.languages
 
+    def get_language_for_file(self, file_path: str) -> Language | None:
+        """
+        Determine language for a file based on configured project languages.
+
+        PRE: file_path is a non-empty string (relative or absolute path allowed)
+
+        POST-1: Returns Language if file_path matches a configured language matcher
+        POST-2: Returns None if no configured language matches file_path
+
+        INV (5-Point Checklist):
+        1. State Invariance: project_config and project state unchanged
+        2. Side Effect Prohibition: No I/O, no logging, no external state
+        3. Ordering Constraints: None (pure lookup)
+        4. Resource Invariants: No file handles or memory allocation beyond locals
+        5. Exception Safety: Only ValueError for PRE violation, no other raises
+
+        ERRORS-1: ValueError if file_path is empty
+        """
+        if not file_path:
+            raise ValueError("file_path must be a non-empty string")
+
+        filename = os.path.basename(file_path)
+        for language in self.project_config.languages:
+            matcher = language.get_source_fn_matcher()
+            if matcher.is_relevant_filename(filename):
+                return language
+        return None
+
     @classmethod
     def load(cls, project_root: str | Path, autogenerate: bool = True) -> "Project":
         project_root = Path(project_root).resolve()

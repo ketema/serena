@@ -23,6 +23,11 @@ def project(tmp_path: Path) -> Project:
 
 
 def test_project_has_no_lsp_lifecycle_methods(project: Project) -> None:
+    """
+    Contract: contracts/project_config_only_contract.py
+    Clause: INV-1, INV-2, INV-3 - Project has NO LSP lifecycle methods
+    Category: invariant
+    """
     assert not hasattr(project, "create_lsp_manager"), (
         "INV-1 violation: Project has create_lsp_manager method\n"
         "Contract: ProjectConfigOnlyContract\n"
@@ -47,6 +52,11 @@ def test_project_has_no_lsp_lifecycle_methods(project: Project) -> None:
 
 
 def test_project_exposes_configuration_only(project: Project) -> None:
+    """
+    Contract: contracts/project_config_only_contract.py
+    Clause: project_root POST-1, project_name POST-1, languages POST-1, project_config POST-1
+    Category: positive
+    """
     assert project.project_root, "Project.project_root must be set"
     assert project.project_name, "Project.project_name must be set"
     assert isinstance(project.languages, list), "Project.languages must be a list"
