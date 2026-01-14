@@ -77,11 +77,11 @@ class TestPerlLanguageServer:
         # Timeout is stored on the handler (SolidLanguageServerHandler), not SolidLanguageServer
         timeout = language_server.handler._request_timeout
         assert timeout is not None, (
-            f"test_timeout_is_configured FAILED | "
-            f"INV-PERL-01 violated | "
-            f"Expected: _request_timeout configured (not None) | "
-            f"Actual: _request_timeout is None | "
-            f"Guidance: LSP MUST call set_request_timeout() in __init__"
+            "test_timeout_is_configured FAILED | "
+            "INV-PERL-01 violated | "
+            "Expected: _request_timeout configured (not None) | "
+            "Actual: _request_timeout is None | "
+            "Guidance: LSP MUST call set_request_timeout() in __init__"
         )
         assert timeout == 60.0, (
             f"test_timeout_is_configured FAILED | "
