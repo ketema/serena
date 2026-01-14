@@ -1,5 +1,7 @@
 import logging
 import os
+import shutil
+import subprocess
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,6 +27,12 @@ from .solidlsp.clojure import is_clojure_cli_available
 configure(level=logging.INFO)
 
 log = logging.getLogger(__name__)
+
+
+@pytest.fixture
+def anyio_backend() -> str:
+    """Limit anyio tests to asyncio backend (trio not required)."""
+    return "asyncio"
 
 
 @pytest.fixture(scope="session")
@@ -145,6 +153,8 @@ def language_server(request: LanguageParamRequest):
         raise ValueError("Language parameter must be provided via pytest.mark.parametrize")
 
     language = request.param
+    if not language_tests_enabled(language):
+        pytest.skip(f"Tests for language {language} are not enabled.")
     with start_default_ls_context(language) as ls:
         yield ls
 
@@ -203,11 +213,81 @@ def _determine_disabled_languages() -> list[Language]:
     if not clojure_tests_enabled:
         result.append(Language.CLOJURE)
 
+    fsharp_tests_enabled = _is_fsharp_runtime_available()
+    if not fsharp_tests_enabled:
+        result.append(Language.FSHARP)
+
+    powershell_tests_enabled = _is_powershell_runtime_available()
+    if not powershell_tests_enabled:
+        result.append(Language.POWERSHELL)
+
+    ruby_tests_enabled = _is_ruby_runtime_available()
+    if not ruby_tests_enabled:
+        result.append(Language.RUBY)
+
+    nix_tests_enabled = _is_nix_runtime_available()
+    if not nix_tests_enabled:
+        result.append(Language.NIX)
+
+    rego_tests_enabled = _is_rego_runtime_available()
+    if not rego_tests_enabled:
+        result.append(Language.REGO)
+
+    perl_tests_enabled = _is_perl_runtime_available()
+    if not perl_tests_enabled:
+        result.append(Language.PERL)
+
     al_tests_enabled = True
     if not al_tests_enabled:
         result.append(Language.AL)
 
     return result
+
+
+def _is_fsharp_runtime_available() -> bool:
+    dotnet_exe = shutil.which("dotnet")
+    if not dotnet_exe:
+        return False
+    fsharp_ls_dir = Path.home() / ".solidlsp" / "language_servers" / "static" / "FSharpLanguageServer" / "fsharp-lsp"
+    fsautocomplete_path = fsharp_ls_dir / ("fsautocomplete.exe" if os.name == "nt" else "fsautocomplete")
+    return fsautocomplete_path.exists()
+
+
+def _is_powershell_runtime_available() -> bool:
+    return shutil.which("pwsh") is not None
+
+
+def _is_ruby_runtime_available() -> bool:
+    if shutil.which("ruby") is None:
+        return False
+    if shutil.which("ruby-lsp") is not None:
+        return True
+    repo_path = get_repo_path(Language.RUBY)
+    gemfile_lock = repo_path / "Gemfile.lock"
+    if gemfile_lock.exists() and "ruby-lsp" in gemfile_lock.read_text().lower():
+        bundle_path = shutil.which("bundle")
+        return bundle_path is not None or (repo_path / "bin" / "bundle").exists()
+    return False
+
+
+def _is_nix_runtime_available() -> bool:
+    return shutil.which("nix") is not None
+
+
+def _is_rego_runtime_available() -> bool:
+    return shutil.which("regal") is not None
+
+
+def _is_perl_runtime_available() -> bool:
+    if shutil.which("perl") is None:
+        return False
+    result = subprocess.run(
+        ["perl", "-MPerl::LanguageServer", "-e", "print $Perl::LanguageServer::VERSION"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 _disabled_languages = _determine_disabled_languages()
