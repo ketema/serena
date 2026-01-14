@@ -302,17 +302,17 @@ def test_get_lsp_pool_stats_calls_pool(
     """
     WHAT: GET /get_lsp_pool_stats delegates to GlobalLanguageServerPool
     WHY: REQ-DASH-002 - Endpoint must use pool as source of truth
-    EXPECTED: GlobalLanguageServerPool.get_pool_stats() called (or graceful fallback)
+    EXPECTED: GlobalLanguageServerPool.get_stats() called (or graceful fallback)
 
     GUIDANCE (BEHAVIORAL):
-    - Dashboard SHOULD delegate to GlobalLanguageServerPool.get_pool_stats()
+    - Dashboard SHOULD delegate to GlobalLanguageServerPool.get_stats()
     - If pool not available, MUST return empty stats (not error)
     - Implementation free to access pool via agent or global singleton
     """
     # Mock the GlobalLanguageServerPool
     with patch("serena.dashboard.GlobalLanguageServerPool") as mock_pool_class:
         mock_pool = Mock()
-        mock_pool.get_pool_stats = Mock(return_value={"active_servers": 0, "cached_servers": 0})
+        mock_pool.get_stats = Mock(return_value={"active_servers": 0, "cached_servers": 0})
         mock_pool_class.get_instance = Mock(return_value=mock_pool)
 
         dashboard = SerenaDashboardAPI(
@@ -331,7 +331,7 @@ def test_get_lsp_pool_stats_calls_pool(
             f"WHY: REQ-DASH-002 requires LSP pool stats or graceful fallback\n"
             f"EXPECTED: Either pool_stats in response OR HTTP 200 with empty stats\n"
             f"ACTUAL: {data}\n"
-            f"GUIDANCE: Handler SHOULD call GlobalLanguageServerPool.get_instance().get_pool_stats(). "
+            f"GUIDANCE: Handler SHOULD call GlobalLanguageServerPool.get_instance().get_stats(). "
             f"If pool not available, return {{'pool_stats': {{}}}}."
         )
 

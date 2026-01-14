@@ -229,25 +229,40 @@ class SessionRegistry:
         """
         Get overview of all bound sessions.
 
+        CONTRACT: POST-OBS-03 from contracts/serena_agent_observability_contract.py
+
         PRE: none
         POST: returns {"sessions": [...], "total_count": int}
         POST: total_count == len(sessions)
         POST: each session has: session_id, workspace_root (str), project_name, connected_at (ISO 8601), activation_source
         POST: project_name == basename(workspace_root)
-        """
-        with self._lock:
-            sessions = []
-            for ctx in self._sessions.values():
-                session_info = {
-                    "session_id": ctx.session_id,
-                    "workspace_root": str(ctx.workspace_root),
-                    "project_name": ctx.workspace_root.name,
-                    "connected_at": ctx.activation_time.isoformat(),
-                    "activation_source": ctx.activation_source,
-                }
-                sessions.append(session_info)
 
+        INV-OBS-02: Never raises exceptions (availability guarantee)
+        ERRORS-OBS-01: Exception suppression, return empty structure
+        """
+        # INV-OBS-02: Never raise exceptions - wrap in try/except per ERRORS-OBS-01
+        try:
+            with self._lock:
+                sessions = []
+                for ctx in self._sessions.values():
+                    session_info = {
+                        "session_id": ctx.session_id,
+                        "workspace_root": str(ctx.workspace_root),
+                        "project_name": ctx.workspace_root.name,
+                        "connected_at": ctx.activation_time.isoformat(),
+                        "activation_source": ctx.activation_source,
+                    }
+                    sessions.append(session_info)
+
+                # POST-OBS-03: Return exactly {"sessions": list, "total_count": int}
+                return {
+                    "sessions": sessions,
+                    "total_count": len(sessions),
+                }
+        except Exception:
+            # ERRORS-OBS-01: Exception suppression for availability
+            # INV-OBS-02: Observability MUST NOT raise exceptions
             return {
-                "sessions": sessions,
-                "total_count": len(sessions),
+                "sessions": [],
+                "total_count": 0,
             }

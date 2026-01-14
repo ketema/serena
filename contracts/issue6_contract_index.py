@@ -78,6 +78,7 @@ from .project_config_only_contract import (
     verify_no_lsp_instances,
     verify_languages_are_strings,
 )
+from .project_language_routing_contract import ProjectLanguageRoutingContract
 
 from .issue6_contract_test_cases import (
     BACKWARD_COMPAT_TEST_CASES,
@@ -151,6 +152,7 @@ __all__ = [
     "verify_no_lsp_lifecycle_methods",
     "verify_no_lsp_instances",
     "verify_languages_are_strings",
+    "ProjectLanguageRoutingContract",
 ]
 
 
@@ -187,6 +189,7 @@ def audit_contract_coverage() -> dict:
         # Phase 4 contracts
         ("SerenaAgentStatelessContract", SerenaAgentStatelessContract),
         ("ProjectConfigOnlyContract", ProjectConfigOnlyContract),
+        ("ProjectLanguageRoutingContract", ProjectLanguageRoutingContract),
     ]
 
     result = {}

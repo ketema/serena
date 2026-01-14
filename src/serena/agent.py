@@ -11,7 +11,7 @@ import webbrowser
 from collections.abc import Callable
 from logging import Logger
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, TypeVar
+from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
 from sensai.util import logging
 
@@ -552,12 +552,7 @@ class SerenaAgent:
         return self.serena_config.language_backend == LanguageBackend.LSP
 
     def _get_language_for_file(self, project: Project, file_path: str) -> Language | None:
-        abs_path = Path(project.project_root) / file_path if not os.path.isabs(file_path) else Path(file_path)
-        for language in project.project_config.languages:
-            matcher = language.get_source_fn_matcher()
-            if matcher.is_relevant_filename(str(abs_path)):
-                return language
-        return None
+        return project.get_language_for_file(file_path)
 
     def get_language_server_for_file(self, file_path: str) -> "SolidLanguageServer | None":
         """
@@ -586,6 +581,67 @@ class SerenaAgent:
         lsp = self.get_lsp_pool().acquire(language, workspace_root, session.session_id)
         session.lsp_references[language.value] = lsp
         return lsp
+
+    # =========================================================================
+    # BRIDGE PROPERTIES (Phase 2 - Remove in Phase 4 demolition)
+    # Contract: contracts/serena_agent_observability_contract.py
+    # =========================================================================
+
+    @property
+    def session_registry(self) -> "SessionRegistry":
+        """
+        BRIDGE: Expose session registry for dashboard observability.
+        
+        PRE: None (always callable)
+        POST: Returns SessionRegistry instance (never None)
+        INV: Does not mutate state
+        INV: Thread-safe (SessionRegistry uses internal locking)
+        
+        Contract Authority: contracts/serena_agent_observability_contract.py
+        Remove after: Phase 4 demolition when contract tests exist
+        """
+        return self._session_registry
+
+    def get_session_overview(self) -> dict[str, Any]:
+        """
+        Get overview of all bound sessions (delegation to SessionRegistry).
+
+        CONTRACT: POST-OBS-03, INV-OBS-02, ERRORS-OBS-01
+        from contracts/serena_agent_observability_contract.py
+
+        PRE: None
+        POST: Returns {"sessions": list, "total_count": int}
+        INV-OBS-02: Never raises exceptions (availability guarantee)
+        ERRORS-OBS-01: Exception suppression, return empty structure
+
+        This method exists per DISCONNECT MATRIX B3: delegation to registry.
+        Dashboard and direct callers use this instead of accessing registry directly.
+        """
+        # ERRORS-OBS-01: Catch all exceptions, return empty structure
+        try:
+            return self._session_registry.get_session_overview()
+        except Exception:
+            # INV-OBS-02: Observability MUST NOT raise exceptions
+            # Return empty valid structure on any error
+            return {
+                "sessions": [],
+                "total_count": 0,
+            }
+
+    @property
+    def lsp_pool(self) -> "GlobalLanguageServerPool | None":
+        """
+        BRIDGE: Expose LSP pool for dashboard observability.
+        
+        PRE: None (always callable)
+        POST: Returns GlobalLanguageServerPool or None if not initialized
+        INV: Does not mutate state
+        INV: Thread-safe (pool uses internal locking)
+        
+        Contract Authority: contracts/serena_agent_observability_contract.py
+        Remove after: Phase 4 demolition when contract tests exist
+        """
+        return self._lsp_pool
 
     def _activate_project(self, project: Project) -> None:
         log.info(f"Activating {project.project_name} at {project.project_root}")

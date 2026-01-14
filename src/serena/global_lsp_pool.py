@@ -273,9 +273,12 @@ class GlobalLanguageServerPool:
         with self._pool_lock:
             return set(self._session_refs.get(pool_key, set()))
 
-    def get_pool_stats(self) -> dict:
+    def get_stats(self) -> dict:
         """
         Get statistics about all managed LSP instances for observability.
+
+        CONTRACT: POST-OBS-04 from contracts/serena_agent_observability_contract.py
+        Returns dict with exactly {"lsps": list, "total_count": int}
 
         PRE: none
 
@@ -284,44 +287,54 @@ class GlobalLanguageServerPool:
 
         Thread-safety: Acquires pool_lock (read).
         """
-        with self._pool_lock:
-            lsp_stats = []
-            for pool_key, lsp in self._pool.items():
-                # Determine workspace_root based on pool_key type
-                if isinstance(pool_key, tuple):
-                    # Single-root: (Language, Path)
-                    language = pool_key[0]
-                    workspace_root = str(pool_key[1])
-                else:
-                    # Multi-root: Language only
-                    language = pool_key
-                    workspace_root = "shared"
-
-                # Get ref_count from session_refs (read-only)
-                ref_count = len(self._session_refs.get(pool_key, set()))
-
-                # Determine status from LSP running state and exit code
-                if lsp.is_running():
-                    status = "running"
-                else:
-                    # Not running - check if crashed or stopped cleanly
-                    process = getattr(lsp, "_process", None)
-                    returncode = getattr(process, "returncode", None) if process else None
-                    if returncode is not None and returncode != 0:
-                        status = "crashed"
+        # INV-OBS-02: Never raise exceptions - wrap in try/except per ERRORS-OBS-01
+        try:
+            with self._pool_lock:
+                lsp_stats = []
+                for pool_key, lsp in self._pool.items():
+                    # Determine workspace_root based on pool_key type
+                    if isinstance(pool_key, tuple):
+                        # Single-root: (Language, Path)
+                        language = pool_key[0]
+                        workspace_root = str(pool_key[1])
                     else:
-                        status = "stopped"
+                        # Multi-root: Language only
+                        language = pool_key
+                        workspace_root = "shared"
 
-                lsp_stats.append({
-                    "language": language.name,
-                    "workspace_root": workspace_root,
-                    "ref_count": ref_count,
-                    "status": status,
-                })
+                    # Get ref_count from session_refs (read-only)
+                    ref_count = len(self._session_refs.get(pool_key, set()))
 
+                    # Determine status from LSP running state and exit code
+                    if lsp.is_running():
+                        status = "running"
+                    else:
+                        # Not running - check if crashed or stopped cleanly
+                        process = getattr(lsp, "_process", None)
+                        returncode = getattr(process, "returncode", None) if process else None
+                        if returncode is not None and returncode != 0:
+                            status = "crashed"
+                        else:
+                            status = "stopped"
+
+                    lsp_stats.append({
+                        "language": language.name,
+                        "workspace_root": workspace_root,
+                        "ref_count": ref_count,
+                        "status": status,
+                    })
+
+                # POST-OBS-04: Return exactly {"lsps": list, "total_count": int}
+                return {
+                    "lsps": lsp_stats,
+                    "total_count": len(lsp_stats),
+                }
+        except Exception:
+            # ERRORS-OBS-01: Exception suppression for availability
+            # INV-OBS-02: Observability MUST NOT raise exceptions
             return {
-                "lsps": lsp_stats,
-                "total_count": len(lsp_stats),
+                "lsps": [],
+                "total_count": 0,
             }
 
     def set_reclaim_callback(

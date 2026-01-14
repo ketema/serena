@@ -143,7 +143,14 @@ class SerenaDashboardAPI:
 
     def _get_session_overview(self) -> dict[str, Any]:
         """Get session overview from session registry."""
-        return self._agent.session_registry.get_session_overview()
+        # INV-OBS-02: Observability methods MUST NOT raise exceptions
+        # ERRORS-OBS-01: Return empty structure on exception
+        try:
+            return self._agent.session_registry.get_session_overview()
+        except Exception as e:
+            log.error(f"Failed to get session overview: {e}", exc_info=True)
+            # ERRORS-OBS-01: Return empty valid structure
+            return {"sessions": [], "total_count": 0}
 
     def _get_lsp_pool_stats(self) -> dict[str, Any]:
         """Get LSP pool statistics."""
@@ -151,11 +158,13 @@ class SerenaDashboardAPI:
         try:
             pool = getattr(self._agent, "_lsp_pool", None)
             if pool is not None and isinstance(pool, GlobalLanguageServerPool):
-                return pool.get_pool_stats()
+                # POST-OBS-04: Use get_stats() from observability contract
+                return pool.get_stats()
         except Exception as e:
             log.error(f"Failed to get LSP pool stats: {e}", exc_info=True)
-        
+
         # No pool available or error - return empty stats
+        # ERRORS-OBS-01: Return empty structure on exception
         return {"lsps": [], "total_count": 0}
 
     def _setup_routes(self) -> None:
