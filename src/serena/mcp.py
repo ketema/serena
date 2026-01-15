@@ -365,7 +365,16 @@ class SerenaMCPFactory:
         self.get_session_bridge()
         self.get_lsp_pool()
         log.info("Global services initialized")
-        
+
+        # REQ-SESSION-002: Wire session bridge to agent for tool dispatch context restoration
+        # Root cause fix: Agent created before session_bridge exists, so _session_bridge was None
+        # This ensures execute_fn can restore session context per-request
+        if self.agent is not None:
+            self.agent._session_bridge = self.get_session_bridge()
+            self.agent._session_registry = self.get_session_registry()
+            self.agent._lsp_pool = self.get_lsp_pool()
+            log.info("Session bridge wired to agent")
+
         openai_tool_compatible = self.context.name in ["chatgpt", "codex", "oaicompat-agent"]
         self._set_mcp_tools(mcp_server, openai_tool_compatible=openai_tool_compatible)
         
