@@ -359,19 +359,36 @@ class TestCreateSessionPOST2:
         - Category: positive (header presence)
         - Adversarial: Implementation-blind
         """
-        # ARRANGE: InitializeRequest scenario
-        # Note: This test validates header presence requirement (observable via HTTP response)
+        # ARRANGE: InitializeRequest scenario (no session ID yet)
+        request_has_session_id = False
+        is_initialize_request = True
 
-        # ACT: Header name constant per MCP spec
-        expected_header_name = "Mcp-Session-Id"
+        # ACT: Call contract method to create session
+        result = MCPSessionContract.create_session(
+            request_has_session_id=request_has_session_id,
+            is_initialize_request=is_initialize_request,
+        )
 
-        # ASSERT: POST-2 guarantee (header name correctness)
-        # Implementation MUST include this exact header in response
-        assert expected_header_name == "Mcp-Session-Id", (
+        # ASSERT: POST-2 guarantee (header MUST be present in response)
+        assert result is not None, (
             f"test_create_session_post2_response_contains_session_id_header FAILED\n"
             f"Contract: MCPSessionContract.create_session() POST-2\n"
-            f"EXPECTED: Response header name 'Mcp-Session-Id' (exact case)\n"
-            f"ACTUAL: Header name '{expected_header_name}'\n"
+            f"EXPECTED: Non-None response for InitializeRequest\n"
+            f"ACTUAL: None returned\n"
+            f"GUIDANCE: InitializeRequest MUST return response dict with headers."
+        )
+        assert "headers" in result, (
+            f"test_create_session_post2_response_contains_session_id_header FAILED\n"
+            f"Contract: MCPSessionContract.create_session() POST-2\n"
+            f"EXPECTED: Response contains 'headers' key\n"
+            f"ACTUAL: Keys present: {list(result.keys())}\n"
+            f"GUIDANCE: Response dict MUST include headers dict."
+        )
+        assert "Mcp-Session-Id" in result["headers"], (
+            f"test_create_session_post2_response_contains_session_id_header FAILED\n"
+            f"Contract: MCPSessionContract.create_session() POST-2\n"
+            f"EXPECTED: Headers contain 'Mcp-Session-Id' key (exact case per MCP spec)\n"
+            f"ACTUAL: Header keys: {list(result['headers'].keys())}\n"
             f"GUIDANCE: HTTP response MUST include 'Mcp-Session-Id' header with generated session ID value. "
             f"Header name is case-sensitive per MCP specification."
         )
