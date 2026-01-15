@@ -371,11 +371,11 @@ class TestCreateSessionPOST2:
 
         # ASSERT: POST-2 guarantee (header MUST be present in response)
         assert result is not None, (
-            f"test_create_session_post2_response_contains_session_id_header FAILED\n"
-            f"Contract: MCPSessionContract.create_session() POST-2\n"
-            f"EXPECTED: Non-None response for InitializeRequest\n"
-            f"ACTUAL: None returned\n"
-            f"GUIDANCE: InitializeRequest MUST return response dict with headers."
+            "test_create_session_post2_response_contains_session_id_header FAILED\n"
+            "Contract: MCPSessionContract.create_session() POST-2\n"
+            "EXPECTED: Non-None response for InitializeRequest\n"
+            "ACTUAL: None returned\n"
+            "GUIDANCE: InitializeRequest MUST return response dict with headers."
         )
         assert "headers" in result, (
             f"test_create_session_post2_response_contains_session_id_header FAILED\n"
