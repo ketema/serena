@@ -5,7 +5,7 @@ SERENA PATCH: This file is a patched version of mcp.server.streamable_http_manag
 from the mcp-python-sdk package. It includes modifications to handle invalid/expired
 session IDs gracefully by creating new sessions instead of returning 400 errors.
 
-Original package: mcp==1.12.3
+Original package: mcp==1.25.0
 Patch applied: 2025-10-08
 Patch reason: Augment MCP client caches session IDs across server restarts
 """
@@ -27,8 +27,11 @@ from mcp.server.transport_security import TransportSecuritySettings
 from starlette.requests import Request
 from starlette.types import Receive, Scope, Send
 
+# SERENA PATCH: Import session context for HTTP mode session propagation
+from serena.mcp_transport_context import reset_transport_session_id, set_transport_session_id
+
 # SERENA PATCH: Version compatibility check
-EXPECTED_MCP_VERSION = "1.12.3"
+EXPECTED_MCP_VERSION = "1.25.0"
 try:
     import mcp
 
@@ -80,12 +83,14 @@ class StreamableHTTPSessionManager:
         json_response: bool = False,
         stateless: bool = False,
         security_settings: TransportSecuritySettings | None = None,
+        retry_interval: int | None = None,
     ):
         self.app = app
         self.event_store = event_store
         self.json_response = json_response
         self.stateless = stateless
         self.security_settings = security_settings
+        self.retry_interval = retry_interval
 
         # Session tracking (only used if not stateless)
         self._session_creation_lock = anyio.Lock()
@@ -236,7 +241,12 @@ class StreamableHTTPSessionManager:
         if request_mcp_session_id is not None and request_mcp_session_id in self._server_instances:
             transport = self._server_instances[request_mcp_session_id]
             logger.debug("Session already exists, handling request directly")
-            await transport.handle_request(scope, receive, send)
+            # SERENA PATCH: Set session context for existing session
+            token = set_transport_session_id(request_mcp_session_id)
+            try:
+                await transport.handle_request(scope, receive, send)
+            finally:
+                reset_transport_session_id(token)
             return
 
         if request_mcp_session_id is None:
@@ -255,37 +265,44 @@ class StreamableHTTPSessionManager:
                 self._server_instances[http_transport.mcp_session_id] = http_transport
                 logger.info(f"Created new transport with session ID: {new_session_id}")
 
-                # Define the server runner
-                async def run_server(*, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
-                    async with http_transport.connect() as streams:
-                        read_stream, write_stream = streams
-                        task_status.started()
-                        try:
-                            await self.app.run(
-                                read_stream,
-                                write_stream,
-                                self.app.create_initialization_options(),
-                                stateless=False,  # Stateful mode
-                            )
-                        except Exception as e:
-                            logger.exception(f"Session {http_transport.mcp_session_id} crashed: {e}")
-                        finally:
-                            # Only remove from instances if not terminated
-                            if (
-                                http_transport.mcp_session_id
-                                and http_transport.mcp_session_id in self._server_instances
-                                and not http_transport.is_terminated
-                            ):
-                                logger.info(f"Cleaning up crashed session {http_transport.mcp_session_id} from active instances.")
-                                del self._server_instances[http_transport.mcp_session_id]
+                # SERENA PATCH: Set session context BEFORE starting task
+                # Child task will inherit a copy of this context via anyio's copy_context()
+                token = set_transport_session_id(new_session_id)
+                try:
+                    # Define the server runner
+                    async def run_server(*, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
+                        async with http_transport.connect() as streams:
+                            read_stream, write_stream = streams
+                            task_status.started()
+                            try:
+                                await self.app.run(
+                                    read_stream,
+                                    write_stream,
+                                    self.app.create_initialization_options(),
+                                    stateless=False,  # Stateful mode
+                                )
+                            except Exception as e:
+                                logger.exception(f"Session {http_transport.mcp_session_id} crashed: {e}")
+                            finally:
+                                # Only remove from instances if not terminated
+                                if (
+                                    http_transport.mcp_session_id
+                                    and http_transport.mcp_session_id in self._server_instances
+                                    and not http_transport.is_terminated
+                                ):
+                                    logger.info(f"Cleaning up crashed session {http_transport.mcp_session_id} from active instances.")
+                                    del self._server_instances[http_transport.mcp_session_id]
 
-                # Assert task group is not None for type checking
-                assert self._task_group is not None
-                # Start the server task
-                await self._task_group.start(run_server)
+                    # Assert task group is not None for type checking
+                    assert self._task_group is not None
+                    # Start the server task (inherits copied context with session_id)
+                    await self._task_group.start(run_server)
 
-                # Handle the HTTP request and return the response
-                await http_transport.handle_request(scope, receive, send)
+                    # Handle the HTTP request and return the response
+                    await http_transport.handle_request(scope, receive, send)
+                finally:
+                    # Reset after request handling (doesn't affect already-copied child context)
+                    reset_transport_session_id(token)
         else:
             # SERENA PATCH: Invalid/expired session ID - create new session instead of 400 error
             # This handles cases where clients cache session IDs across server restarts
@@ -307,33 +324,51 @@ class StreamableHTTPSessionManager:
                 )
                 self._server_instances[new_session_id] = http_transport
 
-                async def run_server(*, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
-                    async with http_transport.connect() as streams:
-                        read_stream, write_stream = streams
-                        task_status.started()
-                        try:
-                            await self.app.run(
-                                read_stream,
-                                write_stream,
-                                self.app.create_initialization_options(),
-                                stateless=False,  # Stateful mode
-                            )
-                        except Exception as e:
-                            logger.exception(f"Session {http_transport.mcp_session_id} crashed: {e}")
-                        finally:
-                            # Only remove from instances if not terminated
-                            if (
-                                http_transport.mcp_session_id
-                                and http_transport.mcp_session_id in self._server_instances
-                                and not http_transport.is_terminated
-                            ):
-                                logger.info(f"Cleaning up crashed session {http_transport.mcp_session_id} from active instances.")
-                                del self._server_instances[http_transport.mcp_session_id]
+                # SERENA PATCH: Remove stale session ID from scope so transport accepts as new session
+                # The transport validates that request session ID matches transport session ID.
+                # By removing the stale ID, the transport treats this as a new session initialization
+                # and returns the new session ID in the response headers.
+                modified_scope = dict(scope)
+                modified_scope["headers"] = [
+                    (name, value)
+                    for name, value in scope.get("headers", [])
+                    if name.lower() != b"mcp-session-id"
+                ]
 
-                # Assert task group is not None for type checking
-                assert self._task_group is not None
-                # Start the server task
-                await self._task_group.start(run_server)
+                # SERENA PATCH: Set session context BEFORE starting task
+                # Child task will inherit a copy of this context via anyio's copy_context()
+                token = set_transport_session_id(new_session_id)
+                try:
+                    async def run_server(*, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
+                        async with http_transport.connect() as streams:
+                            read_stream, write_stream = streams
+                            task_status.started()
+                            try:
+                                await self.app.run(
+                                    read_stream,
+                                    write_stream,
+                                    self.app.create_initialization_options(),
+                                    stateless=False,  # Stateful mode
+                                )
+                            except Exception as e:
+                                logger.exception(f"Session {http_transport.mcp_session_id} crashed: {e}")
+                            finally:
+                                # Only remove from instances if not terminated
+                                if (
+                                    http_transport.mcp_session_id
+                                    and http_transport.mcp_session_id in self._server_instances
+                                    and not http_transport.is_terminated
+                                ):
+                                    logger.info(f"Cleaning up crashed session {http_transport.mcp_session_id} from active instances.")
+                                    del self._server_instances[http_transport.mcp_session_id]
 
-                # Handle the HTTP request and return the response
-                await http_transport.handle_request(scope, receive, send)
+                    # Assert task group is not None for type checking
+                    assert self._task_group is not None
+                    # Start the server task (inherits copied context with session_id)
+                    await self._task_group.start(run_server)
+
+                    # Handle the HTTP request with modified scope (stale session ID removed)
+                    await http_transport.handle_request(modified_scope, receive, send)
+                finally:
+                    # Reset after request handling (doesn't affect already-copied child context)
+                    reset_transport_session_id(token)
