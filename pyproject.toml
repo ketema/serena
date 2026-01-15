@@ -309,6 +309,8 @@ markers = [
   "slow: tests that require additional Expert instances and have long startup times (~60-90s each)",
   "toml: language server running for TOML",
   "polyglot: marks tests requiring multiple language servers",
+  "contract: contract verification tests (CL12)",
+  "integration: integration tests that test real system behavior",
 ]
 
 [tool.codespell]

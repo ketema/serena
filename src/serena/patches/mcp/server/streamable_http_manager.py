@@ -304,71 +304,37 @@ class StreamableHTTPSessionManager:
                     # Reset after request handling (doesn't affect already-copied child context)
                     reset_transport_session_id(token)
         else:
-            # SERENA PATCH: Invalid/expired session ID - create new session instead of 400 error
-            # This handles cases where clients cache session IDs across server restarts
+            # MCP SPEC COMPLIANCE: Invalid/expired session ID - return 404 Not Found
+            # Per MCP Specification 2025-03-26, Section "Session Management":
+            # "The server MAY terminate the session at any time, after which it MUST
+            #  respond to requests containing that session ID with HTTP 404 Not Found."
+            # "When a client receives HTTP 404 in response to a request containing an
+            #  Mcp-Session-Id, it MUST start a new session by sending a new
+            #  InitializeRequest without a session ID attached."
+            #
+            # Reference: https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#session-management
+            # Requirement: REQ-SESSION-001, INV-06
             logger.warning(
-                "Invalid or expired session ID received: %s. Creating new session.",
+                "Invalid or expired session ID received: %s. Returning 404 per MCP spec.",
                 request_mcp_session_id,
-                extra={"invalid_session_id": request_mcp_session_id, "action": "create_new_session"},
+                extra={
+                    "invalid_session_id": request_mcp_session_id,
+                    "action": "reject_stale_session",
+                    "response_code": 404,
+                },
             )
 
-            # Create new session (duplicate of "if request_mcp_session_id is None" logic above)
-            logger.debug("Creating new transport for invalid session ID")
-            async with self._session_creation_lock:
-                new_session_id = uuid4().hex
-                http_transport = StreamableHTTPServerTransport(
-                    mcp_session_id=new_session_id,
-                    is_json_response_enabled=self.json_response,
-                    event_store=self.event_store,  # May be None (no resumability)
-                    security_settings=self.security_settings,
-                )
-                self._server_instances[new_session_id] = http_transport
-
-                # SERENA PATCH: Remove stale session ID from scope so transport accepts as new session
-                # The transport validates that request session ID matches transport session ID.
-                # By removing the stale ID, the transport treats this as a new session initialization
-                # and returns the new session ID in the response headers.
-                modified_scope = dict(scope)
-                modified_scope["headers"] = [
-                    (name, value)
-                    for name, value in scope.get("headers", [])
-                    if name.lower() != b"mcp-session-id"
-                ]
-
-                # SERENA PATCH: Set session context BEFORE starting task
-                # Child task will inherit a copy of this context via anyio's copy_context()
-                token = set_transport_session_id(new_session_id)
-                try:
-                    async def run_server(*, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
-                        async with http_transport.connect() as streams:
-                            read_stream, write_stream = streams
-                            task_status.started()
-                            try:
-                                await self.app.run(
-                                    read_stream,
-                                    write_stream,
-                                    self.app.create_initialization_options(),
-                                    stateless=False,  # Stateful mode
-                                )
-                            except Exception as e:
-                                logger.exception(f"Session {http_transport.mcp_session_id} crashed: {e}")
-                            finally:
-                                # Only remove from instances if not terminated
-                                if (
-                                    http_transport.mcp_session_id
-                                    and http_transport.mcp_session_id in self._server_instances
-                                    and not http_transport.is_terminated
-                                ):
-                                    logger.info(f"Cleaning up crashed session {http_transport.mcp_session_id} from active instances.")
-                                    del self._server_instances[http_transport.mcp_session_id]
-
-                    # Assert task group is not None for type checking
-                    assert self._task_group is not None
-                    # Start the server task (inherits copied context with session_id)
-                    await self._task_group.start(run_server)
-
-                    # Handle the HTTP request with modified scope (stale session ID removed)
-                    await http_transport.handle_request(modified_scope, receive, send)
-                finally:
-                    # Reset after request handling (doesn't affect already-copied child context)
-                    reset_transport_session_id(token)
+            # Return 404 Not Found per MCP spec - client MUST reinitialize
+            from starlette.responses import JSONResponse
+            response = JSONResponse(
+                content={
+                    "jsonrpc": "2.0",
+                    "id": "server-error",
+                    "error": {
+                        "code": -32600,
+                        "message": "Not Found: Invalid or expired session ID",
+                    },
+                },
+                status_code=404,
+            )
+            await response(scope, receive, send)
