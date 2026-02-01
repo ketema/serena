@@ -1,4 +1,5 @@
 import inspect
+import json
 import os
 from abc import ABC
 from collections.abc import Iterable
@@ -43,6 +44,10 @@ class Component(ABC):
     @property
     def memories_manager(self) -> "MemoriesManager":
         return self.project.memories_manager
+
+    @staticmethod
+    def _to_json(x: Any) -> str:
+        return json.dumps(x, ensure_ascii=False)
 
     def create_language_server_symbol_retriever(self, file_path: str | None = None) -> LanguageServerSymbolRetriever:
         """
