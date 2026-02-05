@@ -645,8 +645,18 @@ class SerenaAgent:
 
     def _activate_project(self, project: Project) -> None:
         log.info(f"Activating {project.project_name} at {project.project_root}")
+
+        # POST-1: Get session_id from MCP session bridge or create anonymous
+        # Contract: PRE-2 requires session_id is not None
+        session_id = self._session_bridge.get_current_session_id() if self._session_bridge else None
+        if session_id is None:
+            # Fallback to anonymous session when no MCP session
+            session_id = str(uuid.uuid4())
+
+        # POST-1, POST-2, POST-3: Bind session to workspace
+        # INV-2: Idempotent - bind_session internally handles same workspace case
         self.activate_session_project(
-            session_id=str(uuid.uuid4()),
+            session_id=session_id,
             workspace_root=Path(project.project_root),
             source="explicit",
         )
