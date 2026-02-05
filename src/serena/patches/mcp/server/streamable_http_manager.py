@@ -84,6 +84,8 @@ class StreamableHTTPSessionManager:
         stateless: bool = False,
         security_settings: TransportSecuritySettings | None = None,
         retry_interval: int | None = None,
+        on_session_created: Any | None = None,  # PRE-1: Optional[Callable[[str], None]]
+        on_session_closed: Any | None = None,   # PRE-1: Optional[Callable[[str], None]]
     ):
         self.app = app
         self.event_store = event_store
@@ -91,6 +93,11 @@ class StreamableHTTPSessionManager:
         self.stateless = stateless
         self.security_settings = security_settings
         self.retry_interval = retry_interval
+
+        # PRE-1: Store lifecycle callbacks (contract: TransportSessionCallbackContract)
+        # PRE-1: Callbacks are callable or None
+        self._on_session_created = on_session_created
+        self._on_session_closed = on_session_closed
 
         # Session tracking (only used if not stateless)
         self._session_creation_lock = anyio.Lock()
@@ -265,6 +272,10 @@ class StreamableHTTPSessionManager:
                 self._server_instances[http_transport.mcp_session_id] = http_transport
                 logger.info(f"Created new transport with session ID: {new_session_id}")
 
+                # POST-1: Invoke on_session_created callback (INV-01: before first tool executes)
+                # Contract: TransportSessionCallbackContract
+                self._invoke_session_created(new_session_id)
+
                 # SERENA PATCH: Set session context BEFORE starting task
                 # Child task will inherit a copy of this context via anyio's copy_context()
                 token = set_transport_session_id(new_session_id)
@@ -291,6 +302,9 @@ class StreamableHTTPSessionManager:
                                     and not http_transport.is_terminated
                                 ):
                                     logger.info(f"Cleaning up crashed session {http_transport.mcp_session_id} from active instances.")
+                                    # POST-2: Invoke on_session_closed callback (INV-02: on termination)
+                                    # Contract: TransportSessionCallbackContract
+                                    self._invoke_session_closed(http_transport.mcp_session_id)
                                     del self._server_instances[http_transport.mcp_session_id]
 
                     # Assert task group is not None for type checking
@@ -338,3 +352,66 @@ class StreamableHTTPSessionManager:
                 status_code=404,
             )
             await response(scope, receive, send)
+
+    def set_session_callbacks(
+        self,
+        on_session_created: Any | None = None,
+        on_session_closed: Any | None = None,
+    ) -> None:
+        """
+        Set callbacks for session lifecycle events.
+
+        Contract: TransportSessionCallbackContract.set_session_callbacks
+
+        PRE-1: on_session_created is callable or None
+        PRE-2: on_session_closed is callable or None
+
+        POST-1: Subsequent session creations invoke on_session_created
+        POST-2: Subsequent session closures invoke on_session_closed
+        POST-3: Replaces any previously set callbacks
+        """
+        self._on_session_created = on_session_created
+        self._on_session_closed = on_session_closed
+
+    def _invoke_session_created(self, session_id: str) -> None:
+        """
+        Invoke the on_session_created callback.
+
+        Contract: TransportSessionCallbackContract._invoke_session_created
+
+        PRE-1: session_id is non-empty string
+        PRE-2: Called after session_id is generated but before first tool executes
+
+        POST-1: If callback is set → callback(session_id) invoked
+        POST-2: If callback is None → silent no-op
+        POST-3: INV-01 satisfied (called before first tool)
+
+        ERRORS-1: Callback exceptions propagate
+        """
+        if self._on_session_created is not None:
+            # POST-1: Invoke callback with session_id
+            # ERRORS-1: Let exceptions propagate (not swallowed)
+            self._on_session_created(session_id)
+
+    def _invoke_session_closed(self, session_id: str) -> None:
+        """
+        Invoke the on_session_closed callback.
+
+        Contract: TransportSessionCallbackContract._invoke_session_closed
+
+        PRE-1: session_id is non-empty string
+        PRE-2: session_id was previously created via this transport
+
+        POST-1: If callback is set → callback(session_id) invoked
+        POST-2: If callback is None → silent no-op
+        POST-3: INV-02 satisfied (called on termination)
+
+        ERRORS-1: Callback exceptions propagate (but should be logged, not crash server)
+        """
+        if self._on_session_closed is not None:
+            try:
+                # POST-1: Invoke callback with session_id
+                self._on_session_closed(session_id)
+            except Exception:
+                # ERRORS-1: Log exception but don't let it crash server
+                logger.exception(f"Error in on_session_closed callback for session {session_id}")
