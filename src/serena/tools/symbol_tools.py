@@ -2,9 +2,9 @@
 Language server-related tools
 """
 
-import dataclasses
 import json
 import os
+from collections import defaultdict
 from collections.abc import Sequence
 from copy import copy
 from typing import Any
@@ -46,17 +46,19 @@ class GetSymbolsOverviewTool(Tool, ToolMarkerSymbolicRead):
     Gets an overview of the top-level symbols defined in a given file.
     """
 
-    def apply(self, relative_path: str, max_answer_chars: int = -1) -> str:
+    def apply(self, relative_path: str, depth: int = 0, max_answer_chars: int = -1) -> str:
         """
         Use this tool to get a high-level understanding of the code symbols in a file.
         This should be the first tool to call when you want to understand a new file, unless you already know
         what you are looking for.
 
         :param relative_path: the relative path to the file to get the overview of
+        :param depth: depth up to which descendants of top-level symbols shall be retrieved
+            (e.g. 1 retrieves immediate children). Default 0.
         :param max_answer_chars: if the overview is longer than this number of characters,
             no content will be returned. -1 means the default value from the config will be used.
             Don't adjust unless there is really no other way to get the content required for the task.
-        :return: a JSON object containing info about top-level symbols in the file
+        :return: a JSON object containing symbols grouped by kind in a compact format.
         """
         # Route to correct LSP for polyglot projects
         symbol_retriever = self.create_language_server_symbol_retriever(file_path=relative_path)
@@ -68,9 +70,41 @@ class GetSymbolsOverviewTool(Tool, ToolMarkerSymbolicRead):
             raise FileNotFoundError(f"File or directory {relative_path} does not exist in the project.")
         if os.path.isdir(file_path):
             raise ValueError(f"Expected a file path, but got a directory path: {relative_path}. ")
-        result = symbol_retriever.get_symbol_overview(relative_path)[relative_path]
-        result_json_str = json.dumps([dataclasses.asdict(i) for i in result])
+        result = symbol_retriever.get_symbol_overview(relative_path, depth=depth)[relative_path]
+        # Transform to compact format
+        compact_result = self._transform_symbols_to_compact_format(result)
+        result_json_str = self._to_json(compact_result)
         return self._limit_length(result_json_str, max_answer_chars)
+
+    @staticmethod
+    def _transform_symbols_to_compact_format(symbols: list[dict[str, Any]]) -> dict[str, list]:
+        """
+        Transform symbol overview from verbose format to compact grouped format.
+
+        Groups symbols by kind and uses names instead of full symbol objects.
+        For symbols with children, creates nested dictionaries.
+
+        The name_path can be inferred from the hierarchical structure:
+        - Top-level symbols: name_path = name
+        - Nested symbols: name_path = parent_name + "/" + name
+        For example, "convert" under class "ProjectType" has name_path "ProjectType/convert".
+        """
+        result = defaultdict(list)
+
+        for symbol in symbols:
+            kind = symbol.get("kind", "Unknown")
+            name = symbol.get("name", "unknown")
+            children = symbol.get("children", [])
+
+            if children:
+                # Symbol has children: create nested dict {name: children_dict}
+                children_dict = GetSymbolsOverviewTool._transform_symbols_to_compact_format(children)
+                result[kind].append({name: children_dict})
+            else:
+                # Symbol has no children: just add the name
+                result[kind].append(name)
+
+        return result
 
 
 class FindSymbolTool(Tool, ToolMarkerSymbolicRead):
