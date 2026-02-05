@@ -43,6 +43,7 @@ class TestElixirIntegration:
         assert (repo_path / "test" / "test_repo_test.exs").exists(), "test file should exist"
         assert (repo_path / "test" / "models_test.exs").exists(), "models test should exist"
 
+    @pytest.mark.xfail(reason="Expert 0.1.0 bug: cross-file definition request hangs (distributed node deadlock)")
     @pytest.mark.parametrize("language_server", [Language.ELIXIR], indirect=True)
     def test_cross_file_symbol_resolution(self, language_server: SolidLanguageServer):
         """Test that symbols can be resolved across different files."""
