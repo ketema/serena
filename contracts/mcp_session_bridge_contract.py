@@ -68,6 +68,10 @@ class MCPSessionBridgeContract(ABC):
     - INV-4: Anonymous sessions have TTL <= ANONYMOUS_SESSION_TTL_SECONDS
     - INV-5: Session cleanup occurs on transport close or TTL expiration
     - INV-6: ContextVar propagation survives thread pool dispatch
+    - INV-7: HTTP mode (transport_session_id present) → No auto-registration with
+             Path.cwd(); require explicit activate_project call
+    - INV-8: STDIO mode (transport_session_id None) → CWD-based initialization
+             acceptable since client process CWD matches project workspace
 
     PRECONDITIONS:
     - PRE-1 (on_transport_created): mcp_session_id is non-empty string
@@ -141,22 +145,34 @@ class MCPSessionBridgeContract(ABC):
     def set_session_context(
         self,
         session_id: str,
-    ) -> Token:
+    ) -> Token | None:
         """
         Set session context for current execution context.
 
-        PRE: session_id is non-empty string
-        PRE: session_id exists in SessionRegistry OR starts with ANONYMOUS_SESSION_PREFIX
+        PRE-4: session_id is non-empty string
 
-        POST: ContextVar set to session_id
-        POST: Returns Token for later reset
+        POST-6: If session found in registry: ContextVar set, returns Token
+        POST-7: If session NOT found in registry: ContextVar unchanged, returns None
+        POST-8: NO auto-registration with Path.cwd() per INV-7 (HTTP mode fix)
+
+        ERRORS-1: If session_id is empty → raises ValueError (propagated)
 
         BEHAVIOR:
-        1. Set _current_session_id ContextVar to session_id
-        2. Return Token for reset in finally block
+        1. Look up session_id in SessionRegistry
+        2. If found: Set ContextVar, return Token
+        3. If NOT found: Return None (caller must handle - typically means
+           activate_project not called yet in HTTP mode)
+        4. NEVER auto-register with Path.cwd() - this violates INV-7
+
+        TRANSPORT MODE SEMANTICS (INV-7/INV-8):
+        - HTTP mode: Session MUST be explicitly registered via activate_project
+        - STDIO mode: N/A (transport_session_id is None, this path not taken)
 
         USAGE PATTERN (required per contextvar_session_contract.py):
             token = bridge.set_session_context(session_id)
+            if token is None:
+                # Session not found - prompt user to activate_project
+                return error_response("Project not activated")
             try:
                 await do_work()
             finally:

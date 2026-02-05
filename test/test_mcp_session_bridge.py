@@ -18,6 +18,9 @@ REQUIREMENTS COVERAGE:
   - REQ-6: is_anonymous_session() detects anonymous prefix
   - REQ-7: run_with_session_context() propagates to thread pool
   - REQ-8: start_reaper()/stop_reaper() manage TTL cleanup
+  - REQ-9: set_session_context() returns Token when session found (POST-6)
+  - REQ-10: set_session_context() returns None when session not found (POST-7)
+  - REQ-11: set_session_context() NO auto-registration with Path.cwd() (POST-8, INV-7)
 
 INVARIANTS:
   - INV-1: Every MCP transport session maps to exactly one Serena session
@@ -26,6 +29,8 @@ INVARIANTS:
   - INV-4: Anonymous sessions have TTL <= 300 seconds
   - INV-5: Session cleanup on transport close or TTL expiration
   - INV-6: ContextVar propagation survives thread pool dispatch
+  - INV-7: HTTP mode → No auto-registration with Path.cwd(); require explicit activate_project
+  - INV-8: STDIO mode → CWD-based initialization acceptable
 """
 
 import asyncio
@@ -177,6 +182,249 @@ def test_on_transport_session_closed_idempotent():
 # =============================================================================
 # TEST: Context Propagation (REQ-3, REQ-4)
 # =============================================================================
+
+
+def test_set_session_context_session_found_returns_token():
+    """
+    CONTRACT TRACEABILITY:
+    - Contract: MCPSessionBridgeContract.set_session_context()
+    - Enforces: POST-6 - "If session found in registry: ContextVar set, returns Token"
+    - Category: positive
+    - Adversarial: Implementation-blind
+
+    5-POINT ERROR MESSAGE:
+    1. What failed: set_session_context() with registered session did not return Token
+    2. Why: POST-6 violation - Token required when session exists in registry
+    3. Expected: isinstance(return_value, Token) == True for registered session
+    4. Actual: return_value is {actual_type}
+    5. Guidance: When session_id exists in SessionRegistry, set_session_context() MUST
+       set ContextVar and return Token for cleanup. Observable: isinstance(token, Token) == True.
+       Pattern: token = set_session_context(id); get_current_session_id() == id; reset_session_context(token).
+    """
+    # ARRANGE: Create bridge with mock registry that reports session exists
+    mock_registry = Mock()
+    mock_registry.get_session = Mock(return_value=Mock())  # Session found
+    bridge = create_bridge_implementation(session_registry=mock_registry)
+    session_id = "session-exists-123"
+
+    # ACT: Set session context
+    result = bridge.set_session_context(session_id)
+
+    # ASSERT: POST-6 - Returns Token
+    if not isinstance(result, Token):
+        pytest.fail(
+            f"POST-6 VIOLATION: set_session_context() with registered session did not return Token\n"
+            f"Contract: MCPSessionBridgeContract.set_session_context() POST-6\n"
+            f"EXPECTED: isinstance(return_value, Token) == True for registered session\n"
+            f"ACTUAL: return_value is {type(result).__name__}\n"
+            f"GUIDANCE: When session_id exists in SessionRegistry (get_session() != None), "
+            f"set_session_context() MUST set ContextVar and return Token for cleanup. "
+            f"Observable: isinstance(token, Token) == True, get_current_session_id() == session_id. "
+            f"Pattern: token = set_session_context(id); try: work(); finally: reset_session_context(token)."
+        )
+
+    # Cleanup
+    if result:
+        bridge.reset_session_context(result)
+
+
+def test_set_session_context_session_not_found_returns_none():
+    """
+    CONTRACT TRACEABILITY:
+    - Contract: MCPSessionBridgeContract.set_session_context()
+    - Enforces: POST-7 - "If session NOT found in registry: ContextVar unchanged, returns None"
+    - Category: negative
+    - Adversarial: Implementation-blind
+
+    5-POINT ERROR MESSAGE:
+    1. What failed: set_session_context() with unregistered session did not return None
+    2. Why: POST-7 violation - None required when session NOT in registry
+    3. Expected: set_session_context("unregistered-session") returns None
+    4. Actual: return_value is {actual_value}
+    5. Guidance: When session_id NOT in SessionRegistry (get_session() == None),
+       set_session_context() MUST return None without setting ContextVar. Caller must handle
+       (typically: prompt activate_project). Observable: result == None, get_current_session_id()
+       unchanged. HTTP mode semantics: session MUST be explicitly registered via activate_project.
+    """
+    # ARRANGE: Create bridge with mock registry that reports session NOT found
+    mock_registry = Mock()
+    mock_registry.get_session = Mock(return_value=None)  # Session NOT found
+    bridge = create_bridge_implementation(session_registry=mock_registry)
+    session_id = "unregistered-session-456"
+
+    # ACT: Attempt to set session context
+    result = bridge.set_session_context(session_id)
+
+    # ASSERT: POST-7 - Returns None
+    if result is not None:
+        pytest.fail(
+            f"POST-7 VIOLATION: set_session_context() with unregistered session did not return None\n"
+            f"Contract: MCPSessionBridgeContract.set_session_context() POST-7\n"
+            f"EXPECTED: set_session_context('unregistered-session') returns None\n"
+            f"ACTUAL: return_value is {result}\n"
+            f"GUIDANCE: When session_id NOT in SessionRegistry (get_session() returns None), "
+            f"set_session_context() MUST return None without setting ContextVar. ContextVar MUST remain "
+            f"unchanged. Caller must handle missing session (typically: error_response('Project not activated')). "
+            f"Observable: result == None, get_current_session_id() returns previous value or None. "
+            f"HTTP mode semantics per INV-7: session MUST be explicitly registered via activate_project."
+        )
+
+
+def test_set_session_context_session_not_found_no_auto_registration():
+    """
+    CONTRACT TRACEABILITY:
+    - Contract: MCPSessionBridgeContract.set_session_context()
+    - Enforces: POST-8 - "NO auto-registration with Path.cwd() per INV-7 (HTTP mode fix)"
+    - Enforces: INV-7 - "HTTP mode → No auto-registration with Path.cwd(); require explicit activate_project"
+    - Category: boundary (critical HTTP mode behavior)
+    - Adversarial: Implementation-blind
+
+    5-POINT ERROR MESSAGE:
+    1. What failed: set_session_context() auto-registered session with Path.cwd()
+    2. Why: POST-8/INV-7 violation - MUST NOT auto-register unregistered sessions
+    3. Expected: bind_session() call_count == 0 when session not found
+    4. Actual: bind_session() called {actual_call_count} times
+    5. Guidance: When session_id NOT in registry, set_session_context() MUST return None
+       WITHOUT calling SessionRegistry.bind_session(). NO auto-registration with Path.cwd().
+       HTTP mode requires explicit activate_project call. Observable: bind_session() never called,
+       get_session(session_id) still returns None after set_session_context() fails.
+    """
+    # ARRANGE: Create bridge with mock registry that tracks bind_session calls
+    mock_registry = Mock()
+    mock_registry.get_session = Mock(return_value=None)  # Session NOT found
+    mock_registry.bind_session = Mock()  # Track registration attempts
+    bridge = create_bridge_implementation(session_registry=mock_registry)
+    session_id = "unregistered-http-session-789"
+
+    # ACT: Attempt to set session context (should NOT auto-register)
+    result = bridge.set_session_context(session_id)
+
+    # ASSERT: POST-8 - NO auto-registration
+    actual_call_count = mock_registry.bind_session.call_count
+    if actual_call_count > 0:
+        actual_calls = mock_registry.bind_session.call_args_list
+        pytest.fail(
+            f"POST-8/INV-7 VIOLATION: set_session_context() auto-registered session with Path.cwd()\n"
+            f"Contract: MCPSessionBridgeContract.set_session_context() POST-8, INV-7\n"
+            f"EXPECTED: bind_session() call_count == 0 when session not found\n"
+            f"ACTUAL: bind_session() called {actual_call_count} times with {actual_calls}\n"
+            f"GUIDANCE: When session_id NOT in registry, set_session_context() MUST return None "
+            f"WITHOUT calling SessionRegistry.bind_session(). NEVER auto-register with Path.cwd(). "
+            f"HTTP mode requires explicit activate_project call from client. "
+            f"Observable: bind_session() call_count == 0, get_session(session_id) still None after "
+            f"set_session_context() fails. Old behavior (auto-registration) violated INV-7 and caused "
+            f"HTTP clients to see wrong project (server CWD != client CWD)."
+        )
+
+    # Verify result is None (POST-7)
+    assert result is None, "set_session_context() should return None when session not found"
+
+
+def test_set_session_context_http_mode_no_auto_registration():
+    """
+    CONTRACT TRACEABILITY:
+    - Contract: MCPSessionBridgeContract.set_session_context()
+    - Enforces: INV-7 - "HTTP mode → No auto-registration with Path.cwd(); require explicit activate_project"
+    - Category: critical (HTTP mode-specific behavior)
+    - Adversarial: Implementation-blind
+
+    CRITICAL: This test SIMULATES HTTP MODE by mocking get_transport_session_id()
+    to return a matching session ID. This is the EXACT scenario that caused the
+    multi-project isolation bug - HTTP transport creates session, but if
+    on_transport_session_created() hasn't been called yet, LAZY REGISTRATION
+    would auto-register with Path.cwd() (the SERVER's CWD, not client's).
+
+    5-POINT ERROR MESSAGE:
+    1. What failed: HTTP mode set_session_context() auto-registered session with Path.cwd()
+    2. Why: INV-7 violation - HTTP mode MUST NOT auto-register with server's CWD
+    3. Expected: bind_session() call_count == 0 even when transport_session_id matches
+    4. Actual: bind_session() called {actual_call_count} times with Path.cwd()
+    5. Guidance: When transport_session_id matches session_id (HTTP mode) but session not
+       in registry, MUST return None (not auto-register). Client must call activate_project.
+       Observable: bind_session() never called, get_session(session_id) remains None.
+    """
+    from unittest.mock import patch
+
+    # ARRANGE: Simulate HTTP mode with matching transport session
+    session_id = "http-transport-session-abc"
+    mock_registry = Mock()
+    mock_registry.get_session = Mock(return_value=None)  # Session NOT found
+    mock_registry.bind_session = Mock()  # Track registration attempts
+    bridge = create_bridge_implementation(session_registry=mock_registry)
+
+    # Mock get_transport_session_id to return MATCHING session ID (HTTP mode)
+    with patch('serena.mcp_session_bridge.get_transport_session_id', return_value=session_id):
+        # ACT: Set session context in HTTP mode
+        result = bridge.set_session_context(session_id)
+
+    # ASSERT: INV-7 - NO auto-registration in HTTP mode
+    actual_call_count = mock_registry.bind_session.call_count
+    if actual_call_count > 0:
+        actual_calls = mock_registry.bind_session.call_args_list
+        pytest.fail(
+            f"INV-7 VIOLATION: HTTP mode set_session_context() auto-registered with Path.cwd()\n"
+            f"Contract: MCPSessionBridgeContract INV-7\n"
+            f"EXPECTED: bind_session() call_count == 0 even when transport_session_id matches\n"
+            f"ACTUAL: bind_session() called {actual_call_count} times with {actual_calls}\n"
+            f"GUIDANCE: When transport_session_id matches session_id (HTTP mode) but session not "
+            f"in registry, MUST return None without auto-registering. Path.cwd() in HTTP mode "
+            f"returns SERVER's CWD (from launchctl plist), not client's intended workspace. "
+            f"Client must explicitly call activate_project() with correct workspace path. "
+            f"Observable: bind_session() call_count == 0, result == None."
+        )
+
+    # Verify result is None (require explicit activate_project)
+    assert result is None, (
+        f"INV-7 VIOLATION: HTTP mode set_session_context() should return None when session not found. "
+        f"Got: {result}"
+    )
+
+
+def test_set_session_context_session_not_found_contextvar_unchanged():
+    """
+    CONTRACT TRACEABILITY:
+    - Contract: MCPSessionBridgeContract.set_session_context()
+    - Enforces: POST-7 - "ContextVar unchanged" when session not found
+    - Category: boundary
+    - Adversarial: Implementation-blind
+
+    5-POINT ERROR MESSAGE:
+    1. What failed: set_session_context() modified ContextVar despite returning None
+    2. Why: POST-7 violation - ContextVar MUST remain unchanged when session not found
+    3. Expected: get_current_session_id() == None (or previous value) after failed set
+    4. Actual: get_current_session_id() == {actual_value}
+    5. Guidance: When set_session_context() returns None (session not found), ContextVar
+       MUST NOT be modified. Observable: get_current_session_id() returns same value before
+       and after failed set_session_context() call. No side effects on ContextVar state.
+    """
+    # ARRANGE: Create bridge with mock registry
+    mock_registry = Mock()
+    mock_registry.get_session = Mock(return_value=None)  # Session NOT found
+    bridge = create_bridge_implementation(session_registry=mock_registry)
+    session_id = "unregistered-session-contextvar-test"
+
+    # Capture initial ContextVar state
+    initial_session_id = bridge.get_current_session_id()
+
+    # ACT: Attempt to set session context (should fail)
+    result = bridge.set_session_context(session_id)
+
+    # ASSERT: POST-7 - ContextVar unchanged
+    actual_value = bridge.get_current_session_id()
+    if actual_value != initial_session_id:
+        pytest.fail(
+            f"POST-7 VIOLATION: set_session_context() modified ContextVar despite returning None\n"
+            f"Contract: MCPSessionBridgeContract.set_session_context() POST-7\n"
+            f"EXPECTED: get_current_session_id() == {initial_session_id} (unchanged)\n"
+            f"ACTUAL: get_current_session_id() == {actual_value}\n"
+            f"GUIDANCE: When set_session_context() returns None (session not found), ContextVar "
+            f"MUST NOT be modified. Implementation should check session existence BEFORE setting ContextVar. "
+            f"Observable: get_current_session_id() returns same value before and after failed "
+            f"set_session_context() call. No side effects on ContextVar state."
+        )
+
+    # Verify result is None
+    assert result is None, "set_session_context() should return None when session not found"
 
 
 def test_set_session_context_returns_token():

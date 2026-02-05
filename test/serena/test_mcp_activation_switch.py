@@ -107,6 +107,10 @@ class TestMCPFactoryActivationContract:
         Theater Prevention:
         - Verifies ACTUAL registry state via get_session(), NOT mock.called
         - Cannot pass if bind_session() didn't actually update registry
+
+        INV-7 Compliance (2026-02-05):
+        - Session must be registered via on_transport_session_created() BEFORE set_session_context()
+        - HTTP mode does NOT auto-register sessions (removed LAZY REGISTRATION)
         """
         config, workspace_path = mock_serena_config
         registry = SessionRegistry()
@@ -115,7 +119,15 @@ class TestMCPFactoryActivationContract:
         factory = SerenaMCPFactory(project="test_project")
         factory._session_registry = registry
         bridge = factory.get_session_bridge()
+
+        # INV-7: Register session FIRST via transport hook (simulates HTTP transport creating session)
+        bridge.on_transport_session_created(session_id, workspace_path)
+
+        # NOW set_session_context will find the registered session
         token = bridge.set_session_context(session_id)
+        assert token is not None, (
+            "INV-7 compliance: set_session_context should return Token after on_transport_session_created"
+        )
 
         try:
             with (
@@ -153,6 +165,8 @@ class TestMCPFactoryActivationContract:
         Theater Prevention:
         - Verifies EXACT workspace_root value, NOT just "something was set"
         - Cannot pass if wrong workspace bound
+
+        INV-7 Compliance: Session registered via on_transport_session_created() before set_session_context()
         """
         config, workspace_path = mock_serena_config
         registry = SessionRegistry()
@@ -161,7 +175,11 @@ class TestMCPFactoryActivationContract:
         factory = SerenaMCPFactory(project="test_project")
         factory._session_registry = registry
         bridge = factory.get_session_bridge()
+
+        # INV-7: Register session FIRST
+        bridge.on_transport_session_created(session_id, workspace_path)
         token = bridge.set_session_context(session_id)
+        assert token is not None, "INV-7: Token required after on_transport_session_created"
 
         try:
             with (
@@ -255,15 +273,22 @@ class TestMCPFactoryActivationContract:
         Theater Prevention:
         - Verifies exact exception type
         - Cannot pass if project validation skipped
+
+        INV-7 Compliance: Session registered before set_session_context()
         """
         from serena.agent import ProjectNotFoundError
 
-        config, _ = mock_serena_config
+        config, workspace_path = mock_serena_config
         registry = SessionRegistry()
         factory = SerenaMCPFactory(project="test_project")
         factory._session_registry = registry
         bridge = factory.get_session_bridge()
-        token = bridge.set_session_context("valid-session")
+
+        # INV-7: Register session FIRST
+        session_id = "valid-session"
+        bridge.on_transport_session_created(session_id, workspace_path)
+        token = bridge.set_session_context(session_id)
+        assert token is not None, "INV-7: Token required after on_transport_session_created"
 
         try:
             mock_agent = _make_mock_agent(registry, config, "test_project")
@@ -291,6 +316,8 @@ class TestMCPFactoryActivationContract:
         Theater Prevention:
         - Calls activation twice, verifies no side effects
         - Verifies registry state unchanged after second call
+
+        INV-7 Compliance: Session registered before set_session_context()
         """
         config, workspace_path = mock_serena_config
         registry = SessionRegistry()
@@ -299,7 +326,11 @@ class TestMCPFactoryActivationContract:
         factory = SerenaMCPFactory(project="test_project")
         factory._session_registry = registry
         bridge = factory.get_session_bridge()
+
+        # INV-7: Register session FIRST
+        bridge.on_transport_session_created(session_id, workspace_path)
         token = bridge.set_session_context(session_id)
+        assert token is not None, "INV-7: Token required after on_transport_session_created"
 
         try:
             with (
@@ -346,6 +377,8 @@ class TestMCPFactoryActivationContract:
         Theater Prevention:
         - Creates two sessions, activates project for one
         - Verifies other session unchanged
+
+        INV-7 Compliance: Session registered before set_session_context()
         """
         config, workspace_path = mock_serena_config
         registry = SessionRegistry()
@@ -360,7 +393,11 @@ class TestMCPFactoryActivationContract:
         factory = SerenaMCPFactory(project="test_project")
         factory._session_registry = registry
         bridge = factory.get_session_bridge()
+
+        # INV-7: Register session_1 FIRST
+        bridge.on_transport_session_created(session_id_1, workspace_path)
         token = bridge.set_session_context(session_id_1)
+        assert token is not None, "INV-7: Token required after on_transport_session_created"
 
         try:
             with (

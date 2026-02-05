@@ -139,6 +139,10 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         # POST-7: Session not found - return None (no auto-registration per INV-7)
         # HTTP mode requires explicit activate_project call for workspace binding
         if session is None:
+            logger.debug(
+                "Session %s not found in registry. HTTP mode requires explicit activate_project call.",
+                session_id,
+            )
             return None
 
         # Session found (or created) - set ContextVar and return token for reset
