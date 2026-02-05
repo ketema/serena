@@ -375,6 +375,24 @@ class SerenaMCPFactory:
             self.agent._lsp_pool = self.get_lsp_pool()
             log.info("Session bridge wired to agent")
 
+        # REQ-2026-002: Wire transport session callbacks to session bridge
+        # Contract: SessionCallbackWiringContract.wire_session_callbacks
+        # PRE-W1: session_bridge initialized (satisfied above)
+        # PRE-W2: transport_manager accessible (via mcp_server._session_manager)
+        # POST-W1: on_session_created → bridge.on_transport_session_created(session_id, workspace_root=None)
+        # POST-W2: on_session_closed → bridge.on_transport_session_closed(session_id)
+        # INV-W1: Wiring MUST occur before first HTTP request (satisfied: before yield)
+        if hasattr(mcp_server, '_session_manager'):
+            bridge = self.get_session_bridge()
+            transport_manager = mcp_server._session_manager
+            transport_manager.set_session_callbacks(
+                on_session_created=lambda sid: bridge.on_transport_session_created(sid, workspace_root=None),
+                on_session_closed=lambda sid: bridge.on_transport_session_closed(sid),
+            )
+            log.info("Transport session callbacks wired to session bridge")
+        else:
+            log.warning("FastMCP does not expose _session_manager; transport-session bridge not wired")
+
         openai_tool_compatible = self.context.name in ["chatgpt", "codex", "oaicompat-agent"]
         self._set_mcp_tools(mcp_server, openai_tool_compatible=openai_tool_compatible)
         
