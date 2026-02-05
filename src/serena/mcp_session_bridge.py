@@ -125,10 +125,10 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         Set session context in ContextVar.
 
         PRE: session_id is non-empty string
-        POST-4: If session found: ContextVar set, returns Token
-        POST-5: If session NOT found: ContextVar unchanged, returns None
-        POST-6 (LAZY REGISTRATION): If session_id matches transport session and not in registry,
-                auto-register with cwd workspace, then set context
+        POST-6: If session found: ContextVar set, returns Token
+        POST-7: If session NOT found: ContextVar unchanged, returns None
+        POST-8: NO auto-registration with Path.cwd() per INV-7
+        INV-7: HTTP mode requires explicit activate_project call
         """
         if not session_id:
             raise ValueError("session_id must be non-empty")
@@ -136,33 +136,10 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         # Check if session exists in registry first
         session = self._session_registry.get_session(session_id)
 
-        # LAZY REGISTRATION: If session doesn't exist but matches transport session,
-        # auto-register it. This handles the case where HTTP transport created a
-        # session but on_transport_session_created() wasn't called yet.
-        # We only auto-register if session_id matches the current transport session
-        # to avoid creating sessions for truly invalid/random session IDs.
+        # POST-7: Session not found - return None (no auto-registration per INV-7)
+        # HTTP mode requires explicit activate_project call for workspace binding
         if session is None:
-            transport_session_id = get_transport_session_id()
-            if transport_session_id is not None and transport_session_id == session_id:
-                logger.info(
-                    f"Session {session_id} from transport not found in registry. "
-                    f"Auto-registering with workspace_root={Path.cwd()}"
-                )
-                # Auto-register with current working directory as workspace
-                self._session_registry.bind_session(session_id, Path.cwd())
-                # Retrieve the newly registered session
-                session = self._session_registry.get_session(session_id)
-
-                # If still None after registration, something is wrong
-                if session is None:
-                    logger.error(
-                        f"Failed to auto-register session {session_id}. "
-                        "Session registry may be in inconsistent state."
-                    )
-                    return None
-            else:
-                # Session not found and not from transport - return None per POST-5
-                return None
+            return None
 
         # Session found (or created) - set ContextVar and return token for reset
         token = _current_session_id.set(session_id)
