@@ -104,11 +104,23 @@ class MCPSessionBridgeContract(ABC):
 
         POST: Session registered in SessionRegistry
         POST: Session available via get_session(mcp_session_id)
+        POST-IDEM: If session already registered, returns silently (idempotent)
+
+        INV-IDEM: Method is idempotent - duplicate invocations are no-ops.
+                  This handles the POST-4 retroactive registration race condition
+                  where set_session_callbacks may be called multiple times.
 
         BEHAVIOR:
         1. Validate mcp_session_id format
-        2. Call SessionRegistry.bind_session(mcp_session_id, workspace_root)
-        3. Log session creation for monitoring
+        2. Check if session already exists in SessionRegistry
+        3. If exists: Log at DEBUG level, return (no-op)
+        4. If not exists: Call SessionRegistry.bind_session(mcp_session_id, workspace_root)
+        5. Log session creation for monitoring
+
+        RATIONALE (POST-IDEM):
+        Transport layer's POST-4 retroactive registration may invoke this callback
+        for sessions that were already registered. Rather than failing with PRE-1
+        violation from SessionRegistry, the bridge handles this gracefully.
 
         CALLED FROM: Async context (StreamableHTTPSessionManager)
         """

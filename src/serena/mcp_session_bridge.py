@@ -81,9 +81,21 @@ class MCPSessionBridge(MCPSessionBridgeContract):
 
         PRE: mcp_session_id is non-empty string
         POST: Session registered and available via get_session()
+        POST-IDEM: If session already registered, returns silently (idempotent)
+        INV-IDEM: Duplicate invocations are no-ops (handles POST-4 race condition)
         """
         if not mcp_session_id:
             raise ValueError("mcp_session_id must be non-empty")
+
+        # POST-IDEM: Check if session already registered (idempotent guard)
+        existing_session = self._session_registry.get_session(mcp_session_id)
+        if existing_session is not None:
+            logger.debug(
+                "Session %s already registered (idempotent no-op, workspace=%s)",
+                mcp_session_id,
+                existing_session.workspace_root,
+            )
+            return
 
         # Default workspace if none provided
         if workspace_root is None:
