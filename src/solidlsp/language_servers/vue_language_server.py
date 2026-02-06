@@ -196,7 +196,7 @@ class VueLanguageServer(SolidLanguageServer):
 
         return vue_files
 
-    def _ensure_vue_files_indexed_on_ts_server(self) -> None:
+    def _ensure_vue_files_indexed_on_ts_server(self, workspace_root: str) -> None:
         if self._vue_files_indexed:
             return
 
@@ -207,7 +207,7 @@ class VueLanguageServer(SolidLanguageServer):
 
         for vue_file in vue_files:
             try:
-                with self._ts_server.open_file(vue_file) as file_buffer:
+                with self._ts_server.open_file(vue_file, workspace_root) as file_buffer:
                     file_buffer.ref_count += 1
                     self._indexed_vue_file_uris.append(file_buffer.uri)
             except Exception as e:
@@ -222,8 +222,8 @@ class VueLanguageServer(SolidLanguageServer):
     def _get_vue_indexing_wait_time(self) -> float:
         return self.VUE_INDEXING_WAIT_TIME
 
-    def _send_references_request(self, relative_file_path: str, line: int, column: int) -> list[lsp_types.Location] | None:
-        uri = PathUtils.path_to_uri(os.path.join(self.repository_root_path, relative_file_path))
+    def _send_references_request(self, relative_file_path: str, line: int, column: int, workspace_root: str) -> list[lsp_types.Location] | None:
+        uri = PathUtils.path_to_uri(os.path.join(workspace_root, relative_file_path))
         request_params = {
             "textDocument": {"uri": uri},
             "position": {"line": line, "character": column},
@@ -232,28 +232,28 @@ class VueLanguageServer(SolidLanguageServer):
 
         return self.server.send.references(request_params)  # type: ignore[arg-type]
 
-    def _send_ts_references_request(self, relative_file_path: str, line: int, column: int) -> list[ls_types.Location]:
+    def _send_ts_references_request(self, relative_file_path: str, line: int, column: int, workspace_root: str) -> list[ls_types.Location]:
         assert self._ts_server is not None
-        uri = PathUtils.path_to_uri(os.path.join(self.repository_root_path, relative_file_path))
+        uri = PathUtils.path_to_uri(os.path.join(workspace_root, relative_file_path))
         request_params = {
             "textDocument": {"uri": uri},
             "position": {"line": line, "character": column},
             "context": {"includeDeclaration": True},
         }
 
-        with self._ts_server.open_file(relative_file_path):
+        with self._ts_server.open_file(relative_file_path, workspace_root):
             response = self._ts_server.handler.send.references(request_params)  # type: ignore[arg-type]
 
         result: list[ls_types.Location] = []
         if response is not None:
             for item in response:
                 abs_path = PathUtils.uri_to_path(item["uri"])
-                if not Path(abs_path).is_relative_to(self.repository_root_path):
+                if not Path(abs_path).is_relative_to(workspace_root):
                     log.debug(f"Found reference outside repository: {abs_path}, skipping")
                     continue
 
-                rel_path = Path(abs_path).relative_to(self.repository_root_path)
-                if self.is_ignored_path(str(rel_path)):
+                rel_path = Path(abs_path).relative_to(workspace_root)
+                if self.is_ignored_path(str(rel_path), workspace_root):
                     log.debug(f"Ignoring reference in {rel_path}")
                     continue
 
@@ -265,12 +265,12 @@ class VueLanguageServer(SolidLanguageServer):
 
         return result
 
-    def request_file_references(self, relative_file_path: str) -> list:
+    def request_file_references(self, relative_file_path: str, workspace_root: str) -> list:
         if not self.server_started:
             log.error("request_file_references called before Language Server started")
             raise SolidLSPException("Language Server not started")
 
-        absolute_file_path = os.path.join(self.repository_root_path, relative_file_path)
+        absolute_file_path = os.path.join(workspace_root, relative_file_path)
         uri = PathUtils.path_to_uri(absolute_file_path)
 
         request_params = {"textDocument": {"uri": uri}}
@@ -280,7 +280,7 @@ class VueLanguageServer(SolidLanguageServer):
         log.info(f"Request params: {request_params}")
 
         try:
-            with self.open_file(relative_file_path):
+            with self.open_file(relative_file_path, workspace_root):
                 log.debug(f"Sending volar/client/findFileReference for {relative_file_path}")
                 log.debug(f"Request params: {request_params}")
 
@@ -307,12 +307,12 @@ class VueLanguageServer(SolidLanguageServer):
                     continue
 
                 abs_path = PathUtils.uri_to_path(item["uri"])  # type: ignore[arg-type]
-                if not Path(abs_path).is_relative_to(self.repository_root_path):
+                if not Path(abs_path).is_relative_to(workspace_root):
                     log.warning(f"Found file reference outside repository: {abs_path}, skipping")
                     continue
 
-                rel_path = Path(abs_path).relative_to(self.repository_root_path)
-                if self.is_ignored_path(str(rel_path)):
+                rel_path = Path(abs_path).relative_to(workspace_root)
+                if self.is_ignored_path(str(rel_path), workspace_root):
                     log.debug(f"Ignoring file reference in {rel_path}")
                     continue
 
@@ -330,7 +330,7 @@ class VueLanguageServer(SolidLanguageServer):
             return []
 
     @override
-    def request_references(self, relative_file_path: str, line: int, column: int) -> list[ls_types.Location]:
+    def request_references(self, relative_file_path: str, line: int, column: int, workspace_root: str) -> list[ls_types.Location]:
         if not self.server_started:
             log.error("request_references called before Language Server started")
             raise SolidLSPException("Language Server not started")
@@ -339,12 +339,12 @@ class VueLanguageServer(SolidLanguageServer):
             sleep(self._get_wait_time_for_cross_file_referencing())
             self._has_waited_for_cross_file_references = True
 
-        self._ensure_vue_files_indexed_on_ts_server()
-        symbol_refs = self._send_ts_references_request(relative_file_path, line=line, column=column)
+        self._ensure_vue_files_indexed_on_ts_server(workspace_root)
+        symbol_refs = self._send_ts_references_request(relative_file_path, line=line, column=column, workspace_root=workspace_root)
 
         if relative_file_path.endswith(".vue"):
             log.info(f"Attempting to find file-level references for Vue component {relative_file_path}")
-            file_refs = self.request_file_references(relative_file_path)
+            file_refs = self.request_file_references(relative_file_path, workspace_root)
             log.info(f"file_refs result: {len(file_refs)} references found")
 
             seen = set()
@@ -363,24 +363,24 @@ class VueLanguageServer(SolidLanguageServer):
         return symbol_refs
 
     @override
-    def request_definition(self, relative_file_path: str, line: int, column: int) -> list[ls_types.Location]:
+    def request_definition(self, relative_file_path: str, line: int, column: int, workspace_root: str) -> list[ls_types.Location]:
         if not self.server_started:
             log.error("request_definition called before Language Server started")
             raise SolidLSPException("Language Server not started")
 
         assert self._ts_server is not None
-        with self._ts_server.open_file(relative_file_path):
-            return self._ts_server.request_definition(relative_file_path, line, column)
+        with self._ts_server.open_file(relative_file_path, workspace_root):
+            return self._ts_server.request_definition(relative_file_path, line, column, workspace_root)
 
     @override
-    def request_rename_symbol_edit(self, relative_file_path: str, line: int, column: int, new_name: str) -> ls_types.WorkspaceEdit | None:
+    def request_rename_symbol_edit(self, relative_file_path: str, line: int, column: int, new_name: str, workspace_root: str) -> ls_types.WorkspaceEdit | None:
         if not self.server_started:
             log.error("request_rename_symbol_edit called before Language Server started")
             raise SolidLSPException("Language Server not started")
 
         assert self._ts_server is not None
-        with self._ts_server.open_file(relative_file_path):
-            return self._ts_server.request_rename_symbol_edit(relative_file_path, line, column, new_name)
+        with self._ts_server.open_file(relative_file_path, workspace_root):
+            return self._ts_server.request_rename_symbol_edit(relative_file_path, line, column, new_name, workspace_root)
 
     @classmethod
     def _setup_runtime_dependencies(
@@ -726,7 +726,7 @@ class VueLanguageServer(SolidLanguageServer):
 
     @override
     def _request_document_symbols(
-        self, relative_file_path: str, file_data: LSPFileBuffer | None
+        self, relative_file_path: str, workspace_root: str, file_data: LSPFileBuffer | None
     ) -> list[SymbolInformation] | list[DocumentSymbol] | None:
         """
         Override to filter out shorthand property references in Vue files.
@@ -740,7 +740,7 @@ class VueLanguageServer(SolidLanguageServer):
         We filter out Property symbols that have a matching Variable with the same name
         at a different location (the definition), keeping only the definition.
         """
-        symbols = super()._request_document_symbols(relative_file_path, file_data)
+        symbols = super()._request_document_symbols(relative_file_path, workspace_root, file_data)
 
         if symbols is None or len(symbols) == 0:
             return symbols

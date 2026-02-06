@@ -780,9 +780,9 @@ class EclipseJDTLS(SolidLanguageServer):
         self.service_ready_event.wait()
 
     def _request_document_symbols(
-        self, relative_file_path: str, file_data: LSPFileBuffer | None
+        self, relative_file_path: str, workspace_root: str, file_data: LSPFileBuffer | None
     ) -> list[SymbolInformation] | list[DocumentSymbol] | None:
-        result = super()._request_document_symbols(relative_file_path, file_data=file_data)
+        result = super()._request_document_symbols(relative_file_path, workspace_root, file_data=file_data)
         if result is None:
             return None
 

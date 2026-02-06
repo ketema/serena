@@ -41,13 +41,13 @@ class ElixirTools(SolidLanguageServer):
         return super().is_ignored_dirname(dirname) or dirname in ["_build", "deps", "node_modules", ".elixir_ls", ".expert", "cover"]
 
     @override
-    def is_ignored_path(self, relative_path: str, ignore_unsupported_files: bool = True) -> bool:
+    def is_ignored_path(self, relative_path: str, workspace_root: str, ignore_unsupported_files: bool = True) -> bool:
         """Check if a path should be ignored for symbol indexing."""
         if relative_path.endswith("mix.exs"):
             # These are project configuration files, not source code with symbols to index
             return True
 
-        return super().is_ignored_path(relative_path, ignore_unsupported_files)
+        return super().is_ignored_path(relative_path, workspace_root, ignore_unsupported_files)
 
     @classmethod
     def _get_elixir_version(cls) -> str | None:

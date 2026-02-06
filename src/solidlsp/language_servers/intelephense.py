@@ -179,14 +179,14 @@ class Intelephense(SolidLanguageServer):
 
     @override
     # For some reason, the LS may need longer to process this, so we just retry
-    def _send_references_request(self, relative_file_path: str, line: int, column: int) -> list[lsp_types.Location] | None:
+    def _send_references_request(self, relative_file_path: str, line: int, column: int, workspace_root: str) -> list[lsp_types.Location] | None:
         # TODO: The LS doesn't return references contained in other files if it doesn't sleep. This is
         #   despite the LS having processed requests already. I don't know what causes this, but sleeping
         #   one second helps. It may be that sleeping only once is enough but that's hard to reliably test.
         # May be related to the time it takes to read the files or something like that.
         # The sleeping doesn't seem to be needed on all systems
         sleep(1)
-        return super()._send_references_request(relative_file_path, line, column)
+        return super()._send_references_request(relative_file_path, line, column, workspace_root)
 
     @override
     def _send_definition_request(self, definition_params: DefinitionParams) -> Definition | list[LocationLink] | None:

@@ -136,7 +136,7 @@ class FortranLanguageServer(SolidLanguageServer):
         return symbol
 
     @override
-    def request_document_symbols(self, relative_file_path: str, file_buffer: LSPFileBuffer | None = None) -> DocumentSymbols:
+    def request_document_symbols(self, relative_file_path: str, workspace_root: str, file_buffer: LSPFileBuffer | None = None) -> DocumentSymbols:
         # Override to fix fortls's incorrect selectionRange bug.
         #
         # fortls returns selectionRange pointing to line start (character 0) instead of the
@@ -149,10 +149,10 @@ class FortranLanguageServer(SolidLanguageServer):
         # 4. Returns corrected symbols
 
         # Get symbols from fortls (with incorrect selectionRange)
-        document_symbols = super().request_document_symbols(relative_file_path, file_buffer=file_buffer)
+        document_symbols = super().request_document_symbols(relative_file_path, workspace_root, file_buffer=file_buffer)
 
         # Get file content for parsing
-        with self.open_file(relative_file_path) as file_data:
+        with self.open_file(relative_file_path, workspace_root) as file_data:
             file_content = file_data.contents
 
         # Fix selectionRange recursively for all symbols

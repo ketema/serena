@@ -341,7 +341,7 @@ class SourceKitLSP(SolidLanguageServer):
         self._initialization_timestamp = time.time()
 
     @override
-    def request_references(self, relative_file_path: str, line: int, column: int) -> list[ls_types.Location]:
+    def request_references(self, relative_file_path: str, line: int, column: int, workspace_root: str) -> list[ls_types.Location]:
         # SourceKit LSP needs initialization + indexing time after startup
         # before it can provide accurate reference information. This sleep
         # prevents race conditions where references might not be available yet.
@@ -362,12 +362,12 @@ class SourceKitLSP(SolidLanguageServer):
             self._did_sleep_before_requesting_references = True
 
         # Get references with retry logic for CI stability
-        references = super().request_references(relative_file_path, line, column)
+        references = super().request_references(relative_file_path, line, column, workspace_root)
 
         # In CI, if no references found, retry once after additional delay
         if os.getenv("CI") and not references:
             log.info("No references found in CI - retrying after additional 5s delay")
             time.sleep(5)
-            references = super().request_references(relative_file_path, line, column)
+            references = super().request_references(relative_file_path, line, column, workspace_root)
 
         return references

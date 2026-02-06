@@ -614,7 +614,7 @@ class ProjectCommands(AutoRegisteringGroup):
                         continue
                     lsp = lsp_pool.acquire(language, Path(proj.project_root), session_id)
                     acquired_languages.add(language)
-                    lsp.request_document_symbols(f)
+                    lsp.request_document_symbols(f, workspace_root=proj.project_root)
                     language_file_counts[language] += 1
                 except Exception as e:
                     log.error(f"Failed to index {f}, continuing.")
@@ -697,7 +697,7 @@ class ProjectCommands(AutoRegisteringGroup):
         try:
             lsp = lsp_pool.acquire(language, Path(proj.project_root), session_id)
             click.echo(f"Indexing for language {language.value} …")
-            document_symbols = lsp.request_document_symbols(file)
+            document_symbols = lsp.request_document_symbols(file, workspace_root=proj.project_root)
             symbols, _ = document_symbols.get_all_symbols_and_roots()
             if verbose:
                 click.echo(f"Symbols in file '{file}':")
