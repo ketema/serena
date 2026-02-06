@@ -111,6 +111,10 @@ class SessionScopedToolsContract(ABC):
     - POST-B2-01: Returns tool set appropriate for session's project
     - POST-B2-02: Shared Agent state unchanged after call
     - POST-B2-03: Result is consistent with project config at session's workspace_root
+
+    ERRORS:
+    - ERRORS-B2-01: ProjectNotFoundError if workspace_root is None (propagated)
+    - ERRORS-B2-02: ProjectNotFoundError if project config not loadable (propagated)
     """
 
     @abstractmethod
@@ -203,10 +207,17 @@ class GracefulDegradationContract(ABC):
     - INV-GD-03: LSP tools fail with clear error when no workspace bound
     - INV-GD-04: Error message MUST instruct user to call activate_project
 
+    PRECONDITIONS:
+    - PRE-GD-01: session_id is registered in SessionRegistry
+
     POSTCONDITIONS:
     - POST-GD-01: CONFIG tools return normally regardless of project state
     - POST-GD-02: PROJECT/LSP tools raise NoProjectActivatedError when workspace is None
     - POST-GD-03: Error message includes session_id for debugging
+
+    ERRORS:
+    - ERRORS-GD-01: ValueError if session_id not registered (propagated)
+    - ERRORS-GD-02: ProjectNotFoundError for PROJECT/LSP tools when no workspace (propagated)
     """
 
     @abstractmethod
@@ -218,9 +229,11 @@ class GracefulDegradationContract(ABC):
         """
         Check if tool can execute in current session state.
 
-        PRE: session_id is registered
+        PRE-GD-01: session_id is registered
         POST-GD-01: Returns True for CONFIG tools regardless
         POST-GD-02: Returns False for PROJECT/LSP tools when no workspace
+
+        ERRORS-GD-01: ValueError if session_id not registered
         """
         ...
 

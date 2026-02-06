@@ -440,42 +440,61 @@ class TestSessionScopedToolsContract:
             )
 
     def test_inv_b2_02_derived_from_session_config(
-        self, session_registry, project_alpha_path
+        self, session_registry, project_alpha_path, project_beta_path
     ):
         """
         CONTRACT TRACEABILITY:
         - Contract: SessionScopedToolsContract.get_active_tools_for_session()
         - Enforces: INV-B2-02: Tool availability MUST be derived from session's project config
         - Category: invariant (correctness)
-        - Tests REAL SessionRegistry session lookup
+        - Tests REAL SessionRegistry with two different workspaces
 
-        EXPECTED RED: Currently tools are derived from shared _active_tools,
-        not from per-session project config.
+        Verifies each session's workspace_root independently resolves to the correct
+        project path, which is the prerequisite for per-session tool derivation.
         """
         # ARRANGE: Two sessions with different projects
         session_registry.bind_session("session-008a", project_alpha_path)
+        session_registry.bind_session("session-008b", project_beta_path)
 
-        # ACT: Verify session has correct workspace
-        session = session_registry.get_session("session-008a")
+        # ACT: Read each session's workspace
+        session_a = session_registry.get_session("session-008a")
+        session_b = session_registry.get_session("session-008b")
 
-        # ASSERT: Session is bound to correct workspace
-        assert session is not None, (
-            f"INV-B2-02 violation: Session not found in registry\n"
+        # ASSERT: Each session has its own workspace (prerequisite for INV-B2-02)
+        assert session_a is not None and session_b is not None, (
+            f"INV-B2-02 violation: Sessions not found in registry\n"
             f"Contract: SessionScopedToolsContract.get_active_tools_for_session() INV-B2-02\n"
-            f"EXPECTED: Session registered with workspace_root={project_alpha_path}\n"
-            f"ACTUAL: Session is None\n"
+            f"EXPECTED: Both sessions registered\n"
+            f"ACTUAL: session_a={session_a}, session_b={session_b}\n"
             f"GUIDANCE: Tool set MUST reflect session's active project config. "
-            f"Read session's workspace_root, load project.yaml, compute tools. "
-            f"Do not use shared state, do not cache across sessions."
+            f"Each session must be independently resolvable."
         )
 
-        assert session.workspace_root == project_alpha_path.resolve(), (
-            f"INV-B2-02 violation: Session workspace mismatch\n"
+        assert session_a.workspace_root == project_alpha_path.resolve(), (
+            f"INV-B2-02 violation: Session A workspace mismatch\n"
             f"Contract: SessionScopedToolsContract.get_active_tools_for_session() INV-B2-02\n"
             f"EXPECTED: workspace_root={project_alpha_path.resolve()}\n"
-            f"ACTUAL: workspace_root={session.workspace_root}\n"
-            f"GUIDANCE: Session workspace MUST match the path passed to bind_session. "
-            f"Tool availability derives from this workspace's project config."
+            f"ACTUAL: workspace_root={session_a.workspace_root}\n"
+            f"GUIDANCE: Session workspace MUST match the path passed to bind_session."
+        )
+
+        assert session_b.workspace_root == project_beta_path.resolve(), (
+            f"INV-B2-02 violation: Session B workspace mismatch\n"
+            f"Contract: SessionScopedToolsContract.get_active_tools_for_session() INV-B2-02\n"
+            f"EXPECTED: workspace_root={project_beta_path.resolve()}\n"
+            f"ACTUAL: workspace_root={session_b.workspace_root}\n"
+            f"GUIDANCE: Session workspace MUST match the path passed to bind_session."
+        )
+
+        # CRITICAL: Session A's workspace MUST differ from Session B's
+        # This proves workspace isolation — prerequisite for per-session tool derivation
+        assert session_a.workspace_root != session_b.workspace_root, (
+            f"INV-B2-02 violation: Both sessions resolve to same workspace!\n"
+            f"Contract: SessionScopedToolsContract.get_active_tools_for_session() INV-B2-02\n"
+            f"EXPECTED: Different workspaces for different sessions\n"
+            f"ACTUAL: Both = {session_a.workspace_root}\n"
+            f"GUIDANCE: Tool availability MUST be derived from session's project config. "
+            f"If workspaces are identical, tool derivation cannot distinguish sessions."
         )
 
     def test_inv_b2_03_concurrent_different_tools(
@@ -949,12 +968,12 @@ class TestSessionScopedActivationContract:
 
         # Verify it's a file/project-related error
         error_type = type(exc_info.value).__name__
-        assert "NotFound" in error_type or "FileNotFound" in error_type or "Error" in error_type, (
+        assert error_type in ("FileNotFoundError", "ProjectNotFoundError", "ValueError"), (
             f"ERRORS-B3-01 violation: Wrong exception type for invalid workspace\n"
             f"Contract: SessionScopedActivationContract.activate_session_project() ERRORS-B3-01\n"
-            f"EXPECTED: ProjectNotFoundError or FileNotFoundError\n"
-            f"ACTUAL: {error_type}\n"
-            f"GUIDANCE: Invalid workspace_root MUST raise ProjectNotFoundError. "
+            f"EXPECTED: FileNotFoundError or ProjectNotFoundError or ValueError\n"
+            f"ACTUAL: {error_type}: {exc_info.value}\n"
+            f"GUIDANCE: Invalid workspace_root MUST raise ProjectNotFoundError or FileNotFoundError. "
             f"User provided bad path, needs clear feedback. "
             f"Check workspace exists before loading project."
         )
