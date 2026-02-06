@@ -48,6 +48,32 @@ ANONYMOUS_SESSION_PREFIX = "anonymous-"
 # Anonymous session TTL in seconds (5 minutes)
 ANONYMOUS_SESSION_TTL_SECONDS = 300
 
+
+# =============================================================================
+# EXCEPTIONS (CL12 ERRORS clauses)
+# =============================================================================
+
+
+class SessionNotRegisteredError(Exception):
+    """
+    Raised when tool dispatch requires a session that is not registered.
+
+    CONTRACT: run_with_session_context ERRORS-2
+    INVARIANT: INV-06 (Tool execution MUST fail if session_id not registered)
+
+    This is a fail-fast error - no silent fallback allowed.
+    If you see this error, the transport-session bridge callback
+    (on_transport_session_created) was not invoked before tool dispatch.
+    """
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        super().__init__(
+            f"Session '{session_id}' not registered in SessionRegistry. "
+            f"Tool dispatch requires session to be registered first (INV-06). "
+            f"Check that on_transport_session_created callback fired before tool execution."
+        )
+
 # Reaper interval in seconds
 REAPER_INTERVAL_SECONDS = 60
 
@@ -296,17 +322,25 @@ class MCPSessionBridgeContract(ABC):
         """
         Run a sync function with session context propagated.
 
-        PRE: session_id is valid session ID
-        PRE: func is callable taking no arguments
+        PRE-1: session_id is non-empty string
+        PRE-2: func is callable taking no arguments
+        PRE-3: session_id MUST be registered in SessionRegistry (INV-06)
 
-        POST: func executed with session_id in ContextVar
-        POST: ContextVar cleaned up after execution
+        POST-1: func executed with session_id in ContextVar
+        POST-2: ContextVar cleaned up after execution (success or failure)
+        POST-3: LSP server has properly registered workspace path (INV-07)
+
+        ERRORS-1: ValueError if session_id is empty
+        ERRORS-2: SessionNotRegisteredError if session_id not in SessionRegistry
+                  (fail fast per INV-06 - no silent fallback)
 
         BEHAVIOR:
-        1. Create execution context with copy_context()
-        2. Set session_id in copied context
-        3. Run func via context.run()
-        4. Return func result
+        1. Validate session_id is registered in SessionRegistry
+        2. If not registered: raise SessionNotRegisteredError (fail fast)
+        3. Set session context via set_session_context()
+        4. Execute func with context propagated
+        5. Clean up context on exit (success or exception)
+        6. Return func result
 
         THREAD POOL SAFETY:
         This method ensures ContextVar is visible in thread pool workers.

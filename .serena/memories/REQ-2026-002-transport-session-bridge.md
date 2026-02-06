@@ -56,6 +56,8 @@ AI MAY NOT infer success from metrics.
 | INV-03 | Separation | Transport layer SHALL NOT directly access SessionRegistry |
 | INV-04 | Separation | Transport layer SHALL NOT know about MCPSessionBridge internals |
 | INV-05 | Workspace | Session starts with workspace=None; activate_project required to bind |
+| INV-06 | Tool Dispatch | Tool execution MUST fail if session_id not registered in SessionRegistry |
+| INV-07 | Path Resolution | LSP server MUST have properly registered workspace path for ALL activated projects |
 
 ## 5. High-Entropy Zones (Adjudicated)
 

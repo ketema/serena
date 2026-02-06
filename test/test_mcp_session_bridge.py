@@ -65,6 +65,9 @@ def test_on_transport_session_created_registers_session():
     # Setup
     mock_registry = Mock()
     mock_registry.bind_session = Mock()
+    # CL10: Configure get_session to return None (session not yet registered)
+    # This allows on_transport_session_created to register the session
+    mock_registry.get_session = Mock(return_value=None)
     bridge = create_bridge_implementation(session_registry=mock_registry)
 
     mcp_session_id = "session-123"
@@ -753,8 +756,10 @@ def test_run_with_session_context_propagates_to_sync_function():
     """
     TEST CASE: run_with_session_context() makes session_id available in sync function
 
+    Enforces: POST-1, POST-3
+
     REQUIREMENT: REQ-7 (thread pool propagation)
-    CONTRACT: POST - "func executed with session_id in ContextVar"
+    CONTRACT: POST-1 - "func executed with session_id in ContextVar"
     INVARIANT: INV-6 (ContextVar propagation survives thread pool dispatch)
 
     5-POINT ERROR MESSAGE:
@@ -792,9 +797,50 @@ def test_run_with_session_context_propagates_to_sync_function():
         )
 
 
+def test_run_with_session_context_session_not_registered_raises_error():
+    """
+    TEST CASE: run_with_session_context() fails fast when session not registered
+
+    Enforces: PRE-3, ERRORS-2, INV-06
+
+    REQUIREMENT: REQ-2026-002 INV-06 (tool dispatch MUST fail if session not registered)
+    CONTRACT: ERRORS-2 - "SessionNotRegisteredError if session_id not in SessionRegistry"
+
+    5-POINT ERROR MESSAGE:
+    1. What failed: run_with_session_context() did not raise SessionNotRegisteredError
+    2. Why: Contract ERRORS-2 violated - silent fallback instead of fail fast
+    3. Expected: SessionNotRegisteredError raised when session not in registry
+    4. Actual: Function executed without error (silent fallback)
+    5. Guidance: Per INV-06, tool dispatch MUST fail if session not registered.
+       No silent fallback allowed - fail fast and loud.
+    """
+    from contracts.mcp_session_bridge_contract import SessionNotRegisteredError
+
+    # Setup: Create bridge with registry that returns None for get_session (session not found)
+    mock_registry = Mock()
+    mock_registry.get_session = Mock(return_value=None)  # Session NOT registered
+    bridge = create_bridge_implementation(session_registry=mock_registry)
+
+    def func_that_should_not_execute():
+        pytest.fail("ERRORS-2 violation: func executed despite session not being registered")
+
+    # Execute and verify: Should raise SessionNotRegisteredError
+    with pytest.raises(SessionNotRegisteredError) as exc_info:
+        bridge.run_with_session_context("unregistered-session", func_that_should_not_execute)
+
+    # Verify error message contains session_id for debugging
+    assert "unregistered-session" in str(exc_info.value), (
+        f"ERRORS-2 violation: SessionNotRegisteredError should contain session_id\n"
+        f"EXPECTED: Error message contains 'unregistered-session'\n"
+        f"ACTUAL: {exc_info.value}"
+    )
+
+
 def test_run_with_session_context_returns_function_result():
     """
     TEST CASE: run_with_session_context() returns sync function's return value
+
+    Enforces: POST-1
 
     REQUIREMENT: REQ-7 (thread pool propagation)
     CONTRACT: POST - "Return func result"
@@ -937,7 +983,11 @@ def create_bridge_implementation(session_registry=None):
         return MCPSessionBridge(session_registry=session_registry)
     else:
         # Use mock registry for tests that don't care about registry details
+        # CL10: Mock MUST be derived from contract - configure get_session behavior
         mock_registry = Mock()
         mock_registry.bind_session = Mock()
         mock_registry.unbind_session = Mock()
+        # Default: session exists (returns Mock session object)
+        # Tests needing "session not found" must override: mock_registry.get_session = Mock(return_value=None)
+        mock_registry.get_session = Mock(return_value=Mock(workspace_root="/test/workspace"))
         return MCPSessionBridge(session_registry=mock_registry)

@@ -30,6 +30,7 @@ from contracts.mcp_session_bridge_contract import (
     ANONYMOUS_SESSION_TTL_SECONDS,
     REAPER_INTERVAL_SECONDS,
     MCPSessionBridgeContract,
+    SessionNotRegisteredError,
 )
 from serena.mcp_transport_context import get_transport_session_id
 from serena.session_context import set_current_session
@@ -263,12 +264,13 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         if not callable(func):
             raise ValueError("func must be callable")
         
-        # Set session context in ContextVar (may return None if session not found)
+        # PRE-3: session_id MUST be registered in SessionRegistry (INV-06)
+        # Set session context in ContextVar
         token = self.set_session_context(session_id)
 
-        # If session not found, fall back to direct execution without context
+        # ERRORS-2: Fail fast if session not registered (no silent fallback per INV-06)
         if token is None:
-            return func()
+            raise SessionNotRegisteredError(session_id)
 
         # Create filter that injects session_id into all LogRecords
         class SessionFilter(logging.Filter):
