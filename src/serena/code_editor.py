@@ -251,10 +251,11 @@ class LanguageServerCodeEditor(CodeEditor[LanguageServerSymbol]):
         return self._symbol_retriever.get_language_server(relative_path)
 
     class EditedFile(CodeEditor.EditedFile):
-        def __init__(self, lang_server: SolidLanguageServer, relative_path: str, file_buffer: LSPFileBuffer):
+        def __init__(self, lang_server: SolidLanguageServer, relative_path: str, file_buffer: LSPFileBuffer, workspace_root: str):
             super().__init__(relative_path)
             self._lang_server = lang_server
             self._file_buffer = file_buffer
+            self._workspace_root = workspace_root
 
         def get_contents(self) -> str:
             return self._file_buffer.contents
@@ -263,24 +264,24 @@ class LanguageServerCodeEditor(CodeEditor[LanguageServerSymbol]):
             self._file_buffer.contents = contents
 
         def delete_text_between_positions(self, start_pos: PositionInFile, end_pos: PositionInFile) -> None:
-            self._lang_server.delete_text_between_positions(self.relative_path, start_pos.to_lsp_position(), end_pos.to_lsp_position())
+            self._lang_server.delete_text_between_positions(self.relative_path, start_pos.to_lsp_position(), end_pos.to_lsp_position(), workspace_root=self._workspace_root)
 
         def insert_text_at_position(self, pos: PositionInFile, text: str) -> None:
-            self._lang_server.insert_text_at_position(self.relative_path, pos.line, pos.col, text)
+            self._lang_server.insert_text_at_position(self.relative_path, pos.line, pos.col, text, workspace_root=self._workspace_root)
 
         def apply_text_edits(self, text_edits: list[ls_types.TextEdit]) -> None:
-            return self._lang_server.apply_text_edits_to_file(self.relative_path, text_edits)
+            return self._lang_server.apply_text_edits_to_file(self.relative_path, text_edits, workspace_root=self._workspace_root)
 
     @contextmanager
     def _open_file_context(self, relative_path: str) -> Iterator["CodeEditor.EditedFile"]:
         lang_server = self._get_language_server(relative_path)
-        with lang_server.open_file(relative_path) as file_buffer:
-            yield self.EditedFile(lang_server, relative_path, file_buffer)
+        with lang_server.open_file(relative_path, workspace_root=self.project_root) as file_buffer:
+            yield self.EditedFile(lang_server, relative_path, file_buffer, workspace_root=self.project_root)
 
     def _get_code_file_content(self, relative_path: str) -> str:
         """Get the content of a file using the language server."""
         lang_server = self._get_language_server(relative_path)
-        return lang_server.language_server.retrieve_full_file_content(relative_path)
+        return lang_server.language_server.retrieve_full_file_content(relative_path, workspace_root=self.project_root)
 
     def _find_unique_symbol(self, name_path: str, relative_file_path: str) -> LanguageServerSymbol:
         return self._symbol_retriever.find_unique(name_path, within_relative_path=relative_file_path)
@@ -359,7 +360,7 @@ class LanguageServerCodeEditor(CodeEditor[LanguageServerSymbol]):
 
         lang_server = self._get_language_server(relative_file_path)
         rename_result = lang_server.request_rename_symbol_edit(
-            relative_file_path=relative_file_path, line=symbol.location.line, column=symbol.location.column, new_name=new_name
+            relative_file_path=relative_file_path, line=symbol.location.line, column=symbol.location.column, new_name=new_name, workspace_root=self.project_root
         )
         if rename_result is None:
             raise ValueError(

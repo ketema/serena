@@ -668,7 +668,7 @@ class ALLanguageServer(SolidLanguageServer):
         return super().is_ignored_dirname(dirname) or dirname in al_ignore_dirs
 
     @override
-    def request_full_symbol_tree(self, within_relative_path: str | None = None) -> list[UnifiedSymbolInformation]:
+    def request_full_symbol_tree(self, within_relative_path: str | None = None, *, workspace_root: str) -> list[UnifiedSymbolInformation]:
         """
         Override to handle AL's requirement of opening files before requesting symbols.
 
@@ -685,30 +685,35 @@ class ALLanguageServer(SolidLanguageServer):
 
         Args:
             within_relative_path: Restrict search to this file or directory path
+            workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
             include_body: Whether to include symbol body content
 
         Returns:
             Full symbol tree with all AL symbols from opened files organized by directory
 
         """
+        # COMMON-ERRORS-1: Validate workspace_root
+        effective_root = self._effective_root(workspace_root)
+        effective_root_str = str(effective_root)
+
         log.debug("AL: Starting request_full_symbol_tree with file opening")
 
         # Determine the root path for scanning
         if within_relative_path is not None:
-            within_abs_path = os.path.join(self.repository_root_path, within_relative_path)
+            within_abs_path = str(self._resolve_path(workspace_root, within_relative_path))
             if not os.path.exists(within_abs_path):
                 raise FileNotFoundError(f"File or directory not found: {within_abs_path}")
 
             if os.path.isfile(within_abs_path):
                 # Single file case - use parent class implementation
-                root_nodes = self.request_document_symbols(within_relative_path).root_symbols
+                root_nodes = self.request_document_symbols(within_relative_path, workspace_root).root_symbols
                 return root_nodes
 
             # Directory case - scan within this directory
             scan_root = Path(within_abs_path)
         else:
             # Scan entire repository
-            scan_root = Path(self.repository_root_path)
+            scan_root = Path(effective_root_str)
 
         # For AL, we always need to open files to get symbols
         al_files = []
@@ -724,7 +729,7 @@ class ALLanguageServer(SolidLanguageServer):
                     file_path = Path(root) / file
                     # Use forward slashes for consistent paths
                     try:
-                        relative_path = str(file_path.relative_to(self.repository_root_path)).replace("\\", "/")
+                        relative_path = str(file_path.relative_to(effective_root_str)).replace("\\", "/")
                         al_files.append((file_path, relative_path))
                     except ValueError:
                         # File is outside repository root, skip it
@@ -744,7 +749,7 @@ class ALLanguageServer(SolidLanguageServer):
             try:
                 # Use our overridden request_document_symbols which handles opening
                 log.debug(f"AL: Getting symbols for {relative_path}")
-                all_syms, root_syms = self.request_document_symbols(relative_path).get_all_symbols_and_roots()
+                all_syms, root_syms = self.request_document_symbols(relative_path, workspace_root).get_all_symbols_and_roots()
 
                 if root_syms:
                     # Create a file-level symbol containing the document symbols
@@ -805,7 +810,7 @@ class ALLanguageServer(SolidLanguageServer):
 
             # Build hierarchical structure
             result = []
-            repo_path = Path(self.repository_root_path)
+            repo_path = Path(effective_root_str)
             for dir_path, file_symbols in directory_structure.items():
                 if dir_path == ".":
                     # Root level files

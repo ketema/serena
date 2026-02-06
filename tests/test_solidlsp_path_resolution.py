@@ -34,11 +34,18 @@ from unittest.mock import Mock
 class MinimalLSPForTesting:
     """
     Minimal object that provides the 4 helper methods for testing.
-    
+
     We don't need a full SolidLanguageServer instance - just the helper methods.
     This avoids dealing with the complex constructor and abstract methods.
+
+    server_started = True: Many public methods check self.server_started
+    before calling _effective_root. Setting True allows execution to reach
+    the workspace_root validation (COMMON-ERRORS-1 tests).
     """
-    
+
+    server_started = True
+    _has_waited_for_cross_file_references = True
+
     def _effective_root(self, workspace_root: str) -> Path:
         """Import and delegate to actual implementation"""
         from solidlsp.ls import SolidLanguageServer
@@ -60,6 +67,114 @@ class MinimalLSPForTesting:
         """Import and delegate to actual implementation"""
         from solidlsp.ls import SolidLanguageServer
         return SolidLanguageServer._make_cache_key(self, workspace_root, *args)
+
+    def _open_file_context(self, relative_file_path: str, workspace_root: str, file_buffer=None):
+        """Delegate to actual _open_file_context (used by request_document_symbols etc.)"""
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer._open_file_context(self, relative_file_path, workspace_root, file_buffer)
+
+    # =================================================================
+    # PUBLIC METHOD DELEGATIONS (23 methods for Phase 2 testing)
+    # These delegate to SolidLanguageServer class methods.
+    # For COMMON-ERRORS-1 tests, _effective_root raises ValueError
+    # before any LSP infrastructure is needed.
+    # =================================================================
+
+    def open_file(self, relative_file_path: str, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        # open_file is decorated with @contextmanager, so calling it returns
+        # a _GeneratorContextManager. We must enter the context to trigger
+        # body execution (including _effective_root validation).
+        cm = SolidLanguageServer.open_file(self, relative_file_path, workspace_root)
+        return cm.__enter__()
+
+    def is_ignored_path(self, relative_path: str, workspace_root: str, ignore_unsupported_files: bool = True) -> bool:
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.is_ignored_path(self, relative_path, workspace_root, ignore_unsupported_files)
+
+    def insert_text_at_position(self, relative_file_path: str, line: int, column: int, text_to_be_inserted: str, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.insert_text_at_position(self, relative_file_path, line, column, text_to_be_inserted, workspace_root)
+
+    def delete_text_between_positions(self, relative_file_path: str, start, end, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.delete_text_between_positions(self, relative_file_path, start, end, workspace_root)
+
+    def request_definition(self, relative_file_path: str, line: int, column: int, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_definition(self, relative_file_path, line, column, workspace_root)
+
+    def request_references(self, relative_file_path: str, line: int, column: int, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_references(self, relative_file_path, line, column, workspace_root)
+
+    def request_referencing_symbols(self, relative_file_path: str, line: int, column: int, workspace_root: str, include_imports: bool = True, include_self: bool = False, include_body: bool = False, include_file_symbols: bool = False):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_referencing_symbols(self, relative_file_path, line, column, workspace_root, include_imports, include_self, include_body, include_file_symbols)
+
+    def request_document_symbols(self, relative_file_path: str, workspace_root: str, file_buffer=None):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_document_symbols(self, relative_file_path, workspace_root, file_buffer)
+
+    def request_full_symbol_tree(self, within_relative_path=None, *, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_full_symbol_tree(self, within_relative_path, workspace_root=workspace_root)
+
+    def request_overview(self, within_relative_path: str, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_overview(self, within_relative_path, workspace_root)
+
+    def request_dir_overview(self, relative_dir_path: str, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_dir_overview(self, relative_dir_path, workspace_root)
+
+    def request_document_overview(self, relative_file_path: str, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_document_overview(self, relative_file_path, workspace_root)
+
+    def request_hover(self, relative_file_path: str, line: int, column: int, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_hover(self, relative_file_path, line, column, workspace_root)
+
+    def request_completions(self, relative_file_path: str, line: int, column: int, workspace_root: str, allow_incomplete: bool = False):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_completions(self, relative_file_path, line, column, workspace_root, allow_incomplete)
+
+    def request_text_document_diagnostics(self, relative_file_path: str, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_text_document_diagnostics(self, relative_file_path, workspace_root)
+
+    def request_rename_symbol_edit(self, relative_file_path: str, line: int, column: int, new_name: str, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_rename_symbol_edit(self, relative_file_path, line, column, new_name, workspace_root)
+
+    def apply_text_edits_to_file(self, relative_path: str, edits, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.apply_text_edits_to_file(self, relative_path, edits, workspace_root)
+
+    def retrieve_full_file_content(self, file_path: str, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.retrieve_full_file_content(self, file_path, workspace_root)
+
+    def retrieve_content_around_line(self, relative_file_path: str, line: int, workspace_root: str, context_lines_before: int = 0, context_lines_after: int = 0):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.retrieve_content_around_line(self, relative_file_path, line, workspace_root, context_lines_before, context_lines_after)
+
+    def retrieve_symbol_body(self, symbol, workspace_root: str, file_lines=None, file_buffer=None):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.retrieve_symbol_body(self, symbol, workspace_root, file_lines, file_buffer)
+
+    def request_containing_symbol(self, relative_file_path: str, line: int, column=None, workspace_root: str = "", strict: bool = False, include_body: bool = False):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_containing_symbol(self, relative_file_path, line, column, workspace_root, strict, include_body)
+
+    def request_defining_symbol(self, relative_file_path: str, line: int, column: int, workspace_root: str, include_body: bool = False):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_defining_symbol(self, relative_file_path, line, column, workspace_root, include_body)
+
+    def request_workspace_symbol(self, query: str, workspace_root: str):
+        from solidlsp.ls import SolidLanguageServer
+        return SolidLanguageServer.request_workspace_symbol(self, query, workspace_root)
 
 
 class TestEffectiveRoot:
@@ -611,6 +726,514 @@ class TestMakeCacheKey:
 
 
 # =============================================================================
+# PHASE 2: PUBLIC METHOD workspace_root PARAMETER TESTS
+# =============================================================================
+#
+# These tests verify that ALL 23 public methods:
+# 1. Accept workspace_root as MANDATORY parameter (INV-02)
+# 2. Raise ValueError for empty/relative workspace_root (COMMON-ERRORS-1)
+# 3. Use workspace_root (not repository_root_path) for resolution (COMMON-POST-1, COMMON-INV-1)
+#
+# CATEGORY 1: COMMON-ERRORS-1 validation (all 23 methods)
+# CATEGORY 2: Behavioral verification (5 representative methods)
+
+
+# CATEGORY 1: Parameter Validation Tests (All 23 Methods)
+
+ALL_PUBLIC_METHODS = [
+    "open_file",
+    "is_ignored_path",
+    "insert_text_at_position",
+    "delete_text_between_positions",
+    "request_definition",
+    "request_references",
+    "request_referencing_symbols",
+    "request_document_symbols",
+    "request_full_symbol_tree",
+    "request_overview",
+    "request_dir_overview",
+    "request_document_overview",
+    "request_hover",
+    "request_completions",
+    "request_text_document_diagnostics",
+    "request_rename_symbol_edit",
+    "apply_text_edits_to_file",
+    "retrieve_full_file_content",
+    "retrieve_content_around_line",
+    "retrieve_symbol_body",
+    "request_containing_symbol",
+    "request_defining_symbol",
+    "request_workspace_symbol",
+]
+
+
+class TestPublicMethodParameterValidation:
+    """
+    Tests COMMON-ERRORS-1 validation for all 23 public methods.
+
+    All path-resolving methods must raise ValueError when workspace_root
+    is empty or not absolute, enforcing INV-02 (mandatory parameter).
+    """
+
+    @pytest.mark.parametrize("method_name", ALL_PUBLIC_METHODS)
+    def test_common_errors1_empty_workspace_root_rejected(self, method_name):
+        """
+        CONTRACT TRACEABILITY:
+        - Contract: SolidLSPPathResolutionContract (all public methods)
+        - Enforces: COMMON-ERRORS-1: ValueError if workspace_root is empty
+        - Category: error (parameter validation)
+        - Adversarial: Implementation-blind
+        """
+        # ARRANGE: Create LSP and get method
+        lsp = MinimalLSPForTesting()
+        method = getattr(lsp, method_name)
+
+        # Determine minimal valid arguments for this method
+        if method_name == "open_file":
+            args = ("file.py",)
+            kwargs = {"workspace_root": ""}
+        elif method_name == "is_ignored_path":
+            args = ("file.py",)
+            kwargs = {"workspace_root": ""}
+        elif method_name == "insert_text_at_position":
+            args = ("file.py", 0, 0, "text")
+            kwargs = {"workspace_root": ""}
+        elif method_name == "delete_text_between_positions":
+            # Actual signature: (relative_file_path, start: Position, end: Position, workspace_root)
+            # start/end are Position dicts but won't be reached due to _effective_root ValueError
+            args = ("file.py", {"line": 0, "character": 0}, {"line": 1, "character": 0})
+            kwargs = {"workspace_root": ""}
+        elif method_name in ["request_definition", "request_references", "request_hover",
+                             "request_completions", "request_containing_symbol", "request_defining_symbol"]:
+            args = ("file.py", 0, 0)
+            kwargs = {"workspace_root": ""}
+        elif method_name == "request_referencing_symbols":
+            args = ("file.py", 0, 0)
+            kwargs = {"workspace_root": ""}
+        elif method_name == "request_document_symbols":
+            args = ("file.py",)
+            kwargs = {"workspace_root": ""}
+        elif method_name in ["request_full_symbol_tree", "request_overview"]:
+            args = (".",)
+            kwargs = {"workspace_root": ""}
+        elif method_name in ["request_dir_overview", "request_document_overview"]:
+            args = (".",)
+            kwargs = {"workspace_root": ""}
+        elif method_name == "request_text_document_diagnostics":
+            args = ("file.py",)
+            kwargs = {"workspace_root": ""}
+        elif method_name == "request_rename_symbol_edit":
+            args = ("file.py", 0, 0, "new_name")
+            kwargs = {"workspace_root": ""}
+        elif method_name == "apply_text_edits_to_file":
+            args = ("file.py", [])
+            kwargs = {"workspace_root": ""}
+        elif method_name in ["retrieve_full_file_content", "retrieve_content_around_line"]:
+            if method_name == "retrieve_full_file_content":
+                args = ("file.py",)
+            else:
+                # Actual signature: (relative_file_path, line, workspace_root, ...)
+                # workspace_root is 3rd positional param, pass via kwarg only
+                args = ("file.py", 10)
+            kwargs = {"workspace_root": ""}
+        elif method_name == "retrieve_symbol_body":
+            # retrieve_symbol_body checks symbol.get("body") first.
+            # Use a dict-like mock that returns None for .get("body", None)
+            # so execution reaches _effective_root validation.
+            mock_symbol = Mock()
+            mock_symbol.get = Mock(return_value=None)
+            mock_symbol.location = Mock()
+            mock_symbol.location.relativePath = "file.py"
+            args = (mock_symbol,)
+            kwargs = {"workspace_root": ""}
+        elif method_name == "request_workspace_symbol":
+            args = ("query",)
+            kwargs = {"workspace_root": ""}
+        else:
+            pytest.fail(f"Unhandled method: {method_name}")
+
+        # ACT + ASSERT: COMMON-ERRORS-1 must raise ValueError (exact type)
+        with pytest.raises(ValueError) as exc_info:
+            method(*args, **kwargs)
+
+        # Verify error message quality (5-point standard)
+        error_msg = str(exc_info.value).lower()
+        has_workspace_root = "workspace_root" in error_msg
+        has_empty = "empty" in error_msg
+        has_indicator = has_workspace_root or has_empty
+
+        assert has_indicator, (
+            f"COMMON-ERRORS-1 violation in {method_name}\n"
+            f"WHAT FAILED: {method_name}(workspace_root='') raised ValueError but message unclear\n"
+            f"WHY: Contract requires clear validation error message\n"
+            f"EXPECTED: ValueError mentioning 'workspace_root' or 'empty'\n"
+            f"ACTUAL: ValueError('{exc_info.value}')\n"
+            f"GUIDANCE: workspace_root parameter MUST be non-empty string. "
+            f"Validation MUST occur via _effective_root() which checks emptiness. "
+            f"Error message MUST indicate which parameter failed and why (empty not allowed)."
+        )
+
+    @pytest.mark.parametrize("method_name", ALL_PUBLIC_METHODS)
+    def test_common_errors1_relative_workspace_root_rejected(self, method_name):
+        """
+        CONTRACT TRACEABILITY:
+        - Contract: SolidLSPPathResolutionContract (all public methods)
+        - Enforces: COMMON-ERRORS-1: ValueError if workspace_root is not absolute
+        - Category: error (parameter validation)
+        - Adversarial: Implementation-blind
+        """
+        # ARRANGE: Create LSP and get method
+        lsp = MinimalLSPForTesting()
+        method = getattr(lsp, method_name)
+
+        # Determine minimal valid arguments for this method (same logic as above)
+        if method_name == "open_file":
+            args = ("file.py",)
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name == "is_ignored_path":
+            args = ("file.py",)
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name == "insert_text_at_position":
+            args = ("file.py", 0, 0, "text")
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name == "delete_text_between_positions":
+            # Actual signature: (relative_file_path, start: Position, end: Position, workspace_root)
+            args = ("file.py", {"line": 0, "character": 0}, {"line": 1, "character": 0})
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name in ["request_definition", "request_references", "request_hover",
+                             "request_completions", "request_containing_symbol", "request_defining_symbol"]:
+            args = ("file.py", 0, 0)
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name == "request_referencing_symbols":
+            args = ("file.py", 0, 0)
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name == "request_document_symbols":
+            args = ("file.py",)
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name in ["request_full_symbol_tree", "request_overview"]:
+            args = (".",)
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name in ["request_dir_overview", "request_document_overview"]:
+            args = (".",)
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name == "request_text_document_diagnostics":
+            args = ("file.py",)
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name == "request_rename_symbol_edit":
+            args = ("file.py", 0, 0, "new_name")
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name == "apply_text_edits_to_file":
+            args = ("file.py", [])
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name in ["retrieve_full_file_content", "retrieve_content_around_line"]:
+            if method_name == "retrieve_full_file_content":
+                args = ("file.py",)
+            else:
+                # Actual signature: (relative_file_path, line, workspace_root, ...)
+                # workspace_root is 3rd positional param, pass via kwarg only
+                args = ("file.py", 10)
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name == "retrieve_symbol_body":
+            # retrieve_symbol_body checks symbol.get("body") first.
+            # Use a dict-like mock that returns None for .get("body", None)
+            # so execution reaches _effective_root validation.
+            mock_symbol = Mock()
+            mock_symbol.get = Mock(return_value=None)
+            mock_symbol.location = Mock()
+            mock_symbol.location.relativePath = "file.py"
+            args = (mock_symbol,)
+            kwargs = {"workspace_root": "relative/path"}
+        elif method_name == "request_workspace_symbol":
+            args = ("query",)
+            kwargs = {"workspace_root": "relative/path"}
+        else:
+            pytest.fail(f"Unhandled method: {method_name}")
+
+        # ACT + ASSERT: COMMON-ERRORS-1 must raise ValueError (exact type)
+        with pytest.raises(ValueError) as exc_info:
+            method(*args, **kwargs)
+
+        # Verify error message quality (5-point standard)
+        error_msg = str(exc_info.value).lower()
+        has_absolute = "absolute" in error_msg
+        has_workspace_root = "workspace_root" in error_msg
+        has_indicator = has_absolute or has_workspace_root
+
+        assert has_indicator, (
+            f"COMMON-ERRORS-1 violation in {method_name}\n"
+            f"WHAT FAILED: {method_name}(workspace_root='relative/path') raised ValueError but message unclear\n"
+            f"WHY: Contract requires absolute path validation error message\n"
+            f"EXPECTED: ValueError mentioning 'absolute' or 'workspace_root'\n"
+            f"ACTUAL: ValueError('{exc_info.value}')\n"
+            f"GUIDANCE: workspace_root parameter MUST be absolute path. "
+            f"Validation MUST occur via _effective_root() which checks Path.is_absolute(). "
+            f"Error message MUST indicate which parameter failed and why (must be absolute)."
+        )
+
+
+# CATEGORY 2: Behavioral Verification Tests (Representative Methods)
+
+class TestPublicMethodBehavioralContracts:
+    """
+    Tests COMMON-POST-1 and COMMON-INV-1 for representative methods.
+
+    Verifies that methods use workspace_root (not repository_root_path)
+    for path resolution.
+    """
+
+    def test_open_file_common_post1_uses_workspace_root(self):
+        """
+        CONTRACT TRACEABILITY:
+        - Contract: SolidLSPPathResolutionContract.open_file()
+        - Enforces: COMMON-POST-1: Uses workspace_root, not repository_root_path
+        - Enforces: COMMON-INV-1: repository_root_path NOT used for resolution
+        - Category: behavioral verification
+        - Adversarial: Implementation-blind
+        """
+        # ARRANGE: Create LSP with repository_root_path set to one value
+        lsp = MinimalLSPForTesting()
+        lsp.repository_root_path = "/old/repository/root"  # Should NOT be used
+
+        # Mock _resolve_uri to track what workspace_root is passed
+        original_resolve_uri = lsp._resolve_uri
+        calls = []
+
+        def mock_resolve_uri(workspace_root: str, relative_path: str) -> str:
+            calls.append({"workspace_root": workspace_root, "relative_path": relative_path})
+            return original_resolve_uri(workspace_root, relative_path)
+
+        lsp._resolve_uri = mock_resolve_uri
+
+        workspace_root_param = "/new/workspace/root"  # Should BE used
+
+        # ACT: Call open_file with different workspace_root
+        try:
+            # This will likely fail because file doesn't exist, but we just need to verify
+            # _resolve_uri was called with correct workspace_root BEFORE the failure
+            lsp.open_file("file.py", workspace_root=workspace_root_param)
+        except (FileNotFoundError, AttributeError, TypeError):
+            # Expected - file doesn't exist, LSP not fully initialized, etc.
+            # Allow these specific exceptions that occur AFTER path resolution
+            pass
+
+        # ASSERT: COMMON-POST-1 and COMMON-INV-1
+        assert len(calls) > 0, (
+            f"COMMON-POST-1/COMMON-INV-1 violation: open_file did not call _resolve_uri\n"
+            f"Contract: SolidLSPPathResolutionContract.open_file() COMMON-POST-1\n"
+            f"EXPECTED: _resolve_uri called at least once\n"
+            f"ACTUAL: No calls recorded\n"
+            f"GUIDANCE: Method MUST delegate URI construction to _resolve_uri(workspace_root, relative_path). "
+            f"Cannot construct paths directly."
+        )
+
+        # Verify first call used workspace_root parameter, not repository_root_path
+        first_call = calls[0]
+        assert first_call["workspace_root"] == workspace_root_param, (
+            f"COMMON-POST-1 violation: open_file passed wrong workspace_root to _resolve_uri\n"
+            f"Contract: SolidLSPPathResolutionContract.open_file() COMMON-POST-1\n"
+            f"EXPECTED: _resolve_uri called with workspace_root={workspace_root_param}\n"
+            f"ACTUAL: _resolve_uri called with workspace_root={first_call['workspace_root']}\n"
+            f"GUIDANCE: Method MUST pass workspace_root parameter to _resolve_uri, "
+            f"NEVER self.repository_root_path. Repository root is wrong workspace."
+        )
+
+        # Verify repository_root_path was NOT used
+        assert first_call["workspace_root"] != lsp.repository_root_path, (
+            f"COMMON-INV-1 violation: open_file used repository_root_path instead of workspace_root\n"
+            f"Contract: SolidLSPPathResolutionContract.open_file() COMMON-INV-1\n"
+            f"EXPECTED: workspace_root={workspace_root_param} used\n"
+            f"ACTUAL: repository_root_path={lsp.repository_root_path} used\n"
+            f"GUIDANCE: Method MUST use workspace_root parameter, NEVER self.repository_root_path. "
+            f"Multi-project bug: all sessions resolving to first workspace."
+        )
+
+    def test_request_definition_common_post1_uses_workspace_root(self):
+        """
+        CONTRACT TRACEABILITY:
+        - Contract: SolidLSPPathResolutionContract.request_definition()
+        - Enforces: COMMON-POST-1: Uses workspace_root, not repository_root_path
+        - Enforces: COMMON-INV-1: repository_root_path NOT used for resolution
+        - Category: behavioral verification
+        - Adversarial: Implementation-blind
+        """
+        # ARRANGE
+        lsp = MinimalLSPForTesting()
+        lsp.repository_root_path = "/old/repo"
+
+        original_resolve_uri = lsp._resolve_uri
+        calls = []
+
+        def mock_resolve_uri(workspace_root: str, relative_path: str) -> str:
+            calls.append({"workspace_root": workspace_root})
+            return original_resolve_uri(workspace_root, relative_path)
+
+        lsp._resolve_uri = mock_resolve_uri
+        workspace_root_param = "/new/workspace"
+
+        # ACT
+        try:
+            lsp.request_definition("file.py", 0, 0, workspace_root=workspace_root_param)
+        except (FileNotFoundError, AttributeError, TypeError):
+            # Expected - file doesn't exist, LSP not fully initialized, etc.
+            pass
+
+        # ASSERT: COMMON-POST-1 and COMMON-INV-1
+        assert len(calls) > 0, (
+            f"COMMON-POST-1/COMMON-INV-1 violation: request_definition did not call _resolve_uri\n"
+            f"Contract: SolidLSPPathResolutionContract.request_definition() COMMON-POST-1"
+        )
+
+        assert calls[0]["workspace_root"] == workspace_root_param, (
+            f"COMMON-POST-1 violation: request_definition used wrong workspace_root\n"
+            f"Contract: SolidLSPPathResolutionContract.request_definition() COMMON-POST-1\n"
+            f"EXPECTED: workspace_root={workspace_root_param}\n"
+            f"ACTUAL: workspace_root={calls[0]['workspace_root']}\n"
+            f"GUIDANCE: Pass workspace_root parameter to _resolve_uri, not repository_root_path."
+        )
+
+    def test_request_overview_common_post1_uses_workspace_root(self):
+        """
+        CONTRACT TRACEABILITY:
+        - Contract: SolidLSPPathResolutionContract.request_overview()
+        - Enforces: COMMON-POST-1: Uses workspace_root, not repository_root_path
+        - Enforces: COMMON-INV-1: repository_root_path NOT used for resolution
+        - Category: behavioral verification
+        - Adversarial: Implementation-blind
+        """
+        # ARRANGE
+        lsp = MinimalLSPForTesting()
+        lsp.repository_root_path = "/old/repo"
+
+        original_resolve_path = lsp._resolve_path
+        calls = []
+
+        def mock_resolve_path(workspace_root: str, relative_path: str):
+            calls.append({"workspace_root": workspace_root})
+            return original_resolve_path(workspace_root, relative_path)
+
+        lsp._resolve_path = mock_resolve_path
+        workspace_root_param = "/new/workspace"
+
+        # ACT
+        try:
+            lsp.request_overview(".", workspace_root=workspace_root_param)
+        except (FileNotFoundError, AttributeError, TypeError):
+            # Expected - file doesn't exist, LSP not fully initialized, etc.
+            pass
+
+        # ASSERT
+        assert len(calls) > 0, (
+            f"COMMON-POST-1/COMMON-INV-1 violation: request_overview did not call _resolve_path\n"
+            f"Contract: SolidLSPPathResolutionContract.request_overview() COMMON-POST-1"
+        )
+
+        assert calls[0]["workspace_root"] == workspace_root_param, (
+            f"COMMON-POST-1 violation: request_overview used wrong workspace_root\n"
+            f"Contract: SolidLSPPathResolutionContract.request_overview() COMMON-POST-1\n"
+            f"EXPECTED: workspace_root={workspace_root_param}\n"
+            f"ACTUAL: workspace_root={calls[0]['workspace_root']}\n"
+            f"GUIDANCE: Pass workspace_root parameter to _resolve_path, not repository_root_path."
+        )
+
+    def test_is_ignored_path_common_post1_uses_workspace_root(self):
+        """
+        CONTRACT TRACEABILITY:
+        - Contract: SolidLSPPathResolutionContract.is_ignored_path()
+        - Enforces: COMMON-POST-1: Uses workspace_root, not repository_root_path
+        - Enforces: COMMON-INV-1: repository_root_path NOT used for resolution
+        - Category: behavioral verification
+        - Adversarial: Implementation-blind
+        """
+        # ARRANGE
+        lsp = MinimalLSPForTesting()
+        lsp.repository_root_path = "/old/repo"
+
+        original_resolve_path = lsp._resolve_path
+        calls = []
+
+        def mock_resolve_path(workspace_root: str, relative_path: str):
+            calls.append({"workspace_root": workspace_root})
+            return original_resolve_path(workspace_root, relative_path)
+
+        lsp._resolve_path = mock_resolve_path
+        workspace_root_param = "/new/workspace"
+
+        # ACT
+        try:
+            lsp.is_ignored_path("file.py", workspace_root=workspace_root_param)
+        except (FileNotFoundError, AttributeError, TypeError):
+            # Expected - file doesn't exist, LSP not fully initialized, etc.
+            pass
+
+        # ASSERT
+        assert len(calls) > 0, (
+            f"COMMON-POST-1/COMMON-INV-1 violation: is_ignored_path did not call _resolve_path\n"
+            f"Contract: SolidLSPPathResolutionContract.is_ignored_path() COMMON-POST-1"
+        )
+
+        assert calls[0]["workspace_root"] == workspace_root_param, (
+            f"COMMON-POST-1 violation: is_ignored_path used wrong workspace_root\n"
+            f"Contract: SolidLSPPathResolutionContract.is_ignored_path() COMMON-POST-1\n"
+            f"EXPECTED: workspace_root={workspace_root_param}\n"
+            f"ACTUAL: workspace_root={calls[0]['workspace_root']}\n"
+            f"GUIDANCE: Pass workspace_root parameter to _resolve_path, not repository_root_path."
+        )
+
+    def test_request_document_symbols_common_post1_uses_workspace_root(self):
+        """
+        CONTRACT TRACEABILITY:
+        - Contract: SolidLSPPathResolutionContract.request_document_symbols()
+        - Enforces: COMMON-POST-1: Uses workspace_root, not repository_root_path
+        - Enforces: COMMON-INV-1: repository_root_path NOT used for resolution
+        - Category: behavioral verification
+        - Adversarial: Implementation-blind
+        """
+        # ARRANGE
+        lsp = MinimalLSPForTesting()
+        lsp.repository_root_path = "/old/repo"
+
+        # Mock both _resolve_path and _resolve_uri since request_document_symbols might use either
+        original_resolve_path = lsp._resolve_path
+        original_resolve_uri = lsp._resolve_uri
+        calls = []
+
+        def mock_resolve_path(workspace_root: str, relative_path: str):
+            calls.append({"method": "_resolve_path", "workspace_root": workspace_root})
+            return original_resolve_path(workspace_root, relative_path)
+
+        def mock_resolve_uri(workspace_root: str, relative_path: str) -> str:
+            calls.append({"method": "_resolve_uri", "workspace_root": workspace_root})
+            return original_resolve_uri(workspace_root, relative_path)
+
+        lsp._resolve_path = mock_resolve_path
+        lsp._resolve_uri = mock_resolve_uri
+        workspace_root_param = "/new/workspace"
+
+        # ACT
+        try:
+            lsp.request_document_symbols("file.py", workspace_root=workspace_root_param)
+        except (FileNotFoundError, AttributeError, TypeError):
+            # Expected - file doesn't exist, LSP not fully initialized, etc.
+            pass
+
+        # ASSERT
+        assert len(calls) > 0, (
+            f"COMMON-POST-1/COMMON-INV-1 violation: request_document_symbols did not call helper methods\n"
+            f"Contract: SolidLSPPathResolutionContract.request_document_symbols() COMMON-POST-1"
+        )
+
+        # Verify all calls used workspace_root parameter
+        for call in calls:
+            assert call["workspace_root"] == workspace_root_param, (
+                f"COMMON-POST-1 violation: request_document_symbols used wrong workspace_root in {call['method']}\n"
+                f"Contract: SolidLSPPathResolutionContract.request_document_symbols() COMMON-POST-1\n"
+                f"EXPECTED: workspace_root={workspace_root_param}\n"
+                f"ACTUAL: workspace_root={call['workspace_root']}\n"
+                f"GUIDANCE: Pass workspace_root parameter to helper methods, not repository_root_path."
+            )
+
+
+# =============================================================================
 # CLAUSE COVERAGE REPORT
 # =============================================================================
 #
@@ -652,6 +1275,16 @@ class TestMakeCacheKey:
 #   INV-03: ✓ test_resolve_path_inv03_absolute_rejection_enforcement
 #   INV-04: ✓ test_make_cache_key_inv04_workspace_isolation
 #
+# PHASE 2 - Public Method Tests:
+#   COMMON-PRE-1: ✓ (all 23 methods) test_common_errors1_empty_workspace_root_rejected, test_common_errors1_relative_workspace_root_rejected
+#   COMMON-POST-1: ✓ (5 representative methods) test_*_common_post1_uses_workspace_root
+#   COMMON-INV-1: ✓ (5 representative methods) test_*_common_post1_uses_workspace_root
+#   COMMON-ERRORS-1: ✓ (all 23 methods) 46 tests via parametrize
+#   INV-02: ✓ (all 23 methods) Mandatory parameter validated via COMMON-ERRORS-1 tests
+#
 # TOTAL CLAUSE COVERAGE: 100% (all PRE, POST, ERRORS, INV clauses tested)
-# THEATER TEST CHECK: All tests verify EXACT values (paths, keys, exceptions)
+#   - Phase 1: 19 tests (4 helper methods)
+#   - Phase 2: 51 tests (23 public methods)
+#   - Total: 70 tests
+# THEATER TEST CHECK: All tests verify EXACT values (paths, keys, exceptions) or delegation behavior
 # CL12-E COMPLIANCE: All assertions cite contract clause IDs

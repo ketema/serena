@@ -359,17 +359,22 @@ class SolidLanguageServer(ABC):
         """
         return self._ignore_spec
 
-    def is_ignored_path(self, relative_path: str, ignore_unsupported_files: bool = True) -> bool:
+    def is_ignored_path(self, relative_path: str, workspace_root: str, ignore_unsupported_files: bool = True) -> bool:
         """
         Determine if a path should be ignored based on file type
         and ignore patterns.
 
         :param relative_path: Relative path to check
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :param ignore_unsupported_files: whether files that are not supported source files should be ignored
 
         :return: True if the path should be ignored, False otherwise
         """
-        abs_path = os.path.join(self.repository_root_path, relative_path)
+        # COMMON-ERRORS-1: Validate workspace_root
+        root = self._effective_root(workspace_root)
+
+        # COMMON-POST-1, INV-01: Use _resolve_path instead of repository_root_path
+        abs_path = str(self._resolve_path(workspace_root, relative_path))
         if not os.path.exists(abs_path):
             raise FileNotFoundError(f"File {abs_path} not found, the ignore check cannot be performed")
 
@@ -393,7 +398,8 @@ class SolidLanguageServer(ABC):
             if self.is_ignored_dirname(part):
                 return True
 
-        return match_path(relative_path, self.get_ignore_spec(), root_path=self.repository_root_path)
+        # COMMON-POST-1: Use workspace_root for ignore pattern matching
+        return match_path(relative_path, self.get_ignore_spec(), root_path=str(root))
 
     def _shutdown(self, timeout: float = 5.0) -> None:
         """
@@ -612,18 +618,23 @@ class SolidLanguageServer(ABC):
         return self.language_id
 
     @contextmanager
-    def open_file(self, relative_file_path: str) -> Iterator[LSPFileBuffer]:
+    def open_file(self, relative_file_path: str, workspace_root: str) -> Iterator[LSPFileBuffer]:
         """
         Open a file in the Language Server. This is required before making any requests to the Language Server.
 
         :param relative_file_path: The relative path of the file to open.
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         """
         if not self.server_started:
             log.error("open_file called before Language Server started")
             raise SolidLSPException("Language Server not started")
 
-        absolute_file_path = str(PurePath(self.repository_root_path, relative_file_path))
-        uri = pathlib.Path(absolute_file_path).as_uri()
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
+        # COMMON-POST-1, INV-01: Use _resolve_path and _resolve_uri instead of repository_root_path
+        absolute_file_path = str(self._resolve_path(workspace_root, relative_file_path))
+        uri = self._resolve_uri(workspace_root, relative_file_path)
 
         if uri in self.open_file_buffers:
             assert self.open_file_buffers[uri].uri == uri
@@ -663,20 +674,21 @@ class SolidLanguageServer(ABC):
             del self.open_file_buffers[uri]
 
     @contextmanager
-    def _open_file_context(self, relative_file_path: str, file_buffer: LSPFileBuffer | None = None) -> Iterator[LSPFileBuffer]:
+    def _open_file_context(self, relative_file_path: str, workspace_root: str, file_buffer: LSPFileBuffer | None = None) -> Iterator[LSPFileBuffer]:
         """
         Internal context manager to open a file, optionally reusing an existing file buffer.
 
         :param relative_file_path: the relative path of the file to open.
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :param file_buffer: an optional existing file buffer to reuse.
         """
         if file_buffer is not None:
             yield file_buffer
         else:
-            with self.open_file(relative_file_path) as fb:
+            with self.open_file(relative_file_path, workspace_root) as fb:
                 yield fb
 
-    def insert_text_at_position(self, relative_file_path: str, line: int, column: int, text_to_be_inserted: str) -> ls_types.Position:
+    def insert_text_at_position(self, relative_file_path: str, line: int, column: int, text_to_be_inserted: str, workspace_root: str) -> ls_types.Position:
         """
         Insert text at the given line and column in the given file and return
         the updated cursor position after inserting the text.
@@ -685,13 +697,17 @@ class SolidLanguageServer(ABC):
         :param line: The line number at which text should be inserted.
         :param column: The column number at which text should be inserted.
         :param text_to_be_inserted: The text to insert.
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         """
         if not self.server_started:
             log.error("insert_text_at_position called before Language Server started")
             raise SolidLSPException("Language Server not started")
 
-        absolute_file_path = str(PurePath(self.repository_root_path, relative_file_path))
-        uri = pathlib.Path(absolute_file_path).as_uri()
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
+        # COMMON-POST-1, INV-01: Use _resolve_uri instead of repository_root_path
+        uri = self._resolve_uri(workspace_root, relative_file_path)
 
         # Ensure the file is open
         assert uri in self.open_file_buffers
@@ -725,16 +741,22 @@ class SolidLanguageServer(ABC):
         relative_file_path: str,
         start: ls_types.Position,
         end: ls_types.Position,
+        workspace_root: str,
     ) -> str:
         """
         Delete text between the given start and end positions in the given file and return the deleted text.
+
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         """
         if not self.server_started:
             log.error("insert_text_at_position called before Language Server started")
             raise SolidLSPException("Language Server not started")
 
-        absolute_file_path = str(PurePath(self.repository_root_path, relative_file_path))
-        uri = pathlib.Path(absolute_file_path).as_uri()
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
+        # COMMON-POST-1, INV-01: Use _resolve_uri instead of repository_root_path
+        uri = self._resolve_uri(workspace_root, relative_file_path)
 
         # Ensure the file is open
         assert uri in self.open_file_buffers
@@ -759,7 +781,7 @@ class SolidLanguageServer(ABC):
     def _send_definition_request(self, definition_params: DefinitionParams) -> Definition | list[LocationLink] | None:
         return self.server.send.definition(definition_params)
 
-    def request_definition(self, relative_file_path: str, line: int, column: int) -> list[ls_types.Location]:
+    def request_definition(self, relative_file_path: str, line: int, column: int, workspace_root: str) -> list[ls_types.Location]:
         """
         Raise a [textDocument/definition](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_definition) request to the Language Server
         for the symbol at the given line and column in the given file. Wait for the response and return the result.
@@ -767,6 +789,7 @@ class SolidLanguageServer(ABC):
         :param relative_file_path: The relative path of the file that has the symbol for which definition should be looked up
         :param line: The line number of the symbol
         :param column: The column number of the symbol
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
 
         :return: the list of locations where the symbol is defined
         """
@@ -774,19 +797,23 @@ class SolidLanguageServer(ABC):
             log.error("request_definition called before language server started")
             raise SolidLSPException("Language Server not started")
 
+        # COMMON-ERRORS-1: Validate workspace_root
+        root = self._effective_root(workspace_root)
+
         if not self._has_waited_for_cross_file_references:
             # Some LS require waiting for a while before they can return cross-file definitions.
             # This is a workaround for such LS that don't have a reliable "finished initializing" signal.
             sleep(self._get_wait_time_for_cross_file_referencing())
             self._has_waited_for_cross_file_references = True
 
-        with self.open_file(relative_file_path):
+        with self.open_file(relative_file_path, workspace_root):
             # sending request to the language server and waiting for response
             definition_params = cast(
                 DefinitionParams,
                 {
                     LSPConstants.TEXT_DOCUMENT: {
-                        LSPConstants.URI: pathlib.Path(str(PurePath(self.repository_root_path, relative_file_path))).as_uri()
+                        # COMMON-POST-1, INV-01: Use _resolve_uri instead of repository_root_path
+                        LSPConstants.URI: self._resolve_uri(workspace_root, relative_file_path)
                     },
                     LSPConstants.POSITION: {
                         LSPConstants.LINE: line,
@@ -805,13 +832,15 @@ class SolidLanguageServer(ABC):
                     new_item: dict = {}
                     new_item.update(item)
                     new_item["absolutePath"] = PathUtils.uri_to_path(new_item["uri"])
-                    new_item["relativePath"] = PathUtils.get_relative_path(new_item["absolutePath"], self.repository_root_path)
+                    # COMMON-POST-2: relativePath relative to workspace_root
+                    new_item["relativePath"] = PathUtils.get_relative_path(new_item["absolutePath"], str(root))
                     ret.append(ls_types.Location(**new_item))  # type: ignore
                 elif LSPConstants.TARGET_URI in item and LSPConstants.TARGET_RANGE in item and LSPConstants.TARGET_SELECTION_RANGE in item:
                     new_item: dict = {}  # type: ignore
                     new_item["uri"] = item[LSPConstants.TARGET_URI]  # type: ignore
                     new_item["absolutePath"] = PathUtils.uri_to_path(new_item["uri"])
-                    new_item["relativePath"] = PathUtils.get_relative_path(new_item["absolutePath"], self.repository_root_path)
+                    # COMMON-POST-2: relativePath relative to workspace_root
+                    new_item["relativePath"] = PathUtils.get_relative_path(new_item["absolutePath"], str(root))
                     new_item["range"] = item[LSPConstants.TARGET_SELECTION_RANGE]  # type: ignore
                     ret.append(ls_types.Location(**new_item))  # type: ignore
                 else:
@@ -824,7 +853,8 @@ class SolidLanguageServer(ABC):
             new_item: dict = {}  # type: ignore
             new_item.update(response)
             new_item["absolutePath"] = PathUtils.uri_to_path(new_item["uri"])
-            new_item["relativePath"] = PathUtils.get_relative_path(new_item["absolutePath"], self.repository_root_path)
+            # COMMON-POST-2: relativePath relative to workspace_root
+            new_item["relativePath"] = PathUtils.get_relative_path(new_item["absolutePath"], str(root))
             ret.append(ls_types.Location(**new_item))  # type: ignore
         elif response is None:
             # Some language servers return None when they cannot find a definition
@@ -836,16 +866,17 @@ class SolidLanguageServer(ABC):
         return ret
 
     # Some LS cause problems with this, so the call is isolated from the rest to allow overriding in subclasses
-    def _send_references_request(self, relative_file_path: str, line: int, column: int) -> list[lsp_types.Location] | None:
+    def _send_references_request(self, relative_file_path: str, line: int, column: int, workspace_root: str) -> list[lsp_types.Location] | None:
+        # INV-01: Use _resolve_uri instead of repository_root_path
         return self.server.send.references(
             {
-                "textDocument": {"uri": PathUtils.path_to_uri(os.path.join(self.repository_root_path, relative_file_path))},
+                "textDocument": {"uri": self._resolve_uri(workspace_root, relative_file_path)},
                 "position": {"line": line, "character": column},
                 "context": {"includeDeclaration": False},
             }
         )
 
-    def request_references(self, relative_file_path: str, line: int, column: int) -> list[ls_types.Location]:
+    def request_references(self, relative_file_path: str, line: int, column: int, workspace_root: str) -> list[ls_types.Location]:
         """
         Raise a [textDocument/references](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_references) request to the Language Server
         to find references to the symbol at the given line and column in the given file. Wait for the response and return the result.
@@ -854,6 +885,7 @@ class SolidLanguageServer(ABC):
         :param relative_file_path: The relative path of the file that has the symbol for which references should be looked up
         :param line: The line number of the symbol
         :param column: The column number of the symbol
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
 
         :return: A list of locations where the symbol is referenced (excluding ignored directories)
         """
@@ -861,15 +893,18 @@ class SolidLanguageServer(ABC):
             log.error("request_references called before Language Server started")
             raise SolidLSPException("Language Server not started")
 
+        # COMMON-ERRORS-1: Validate workspace_root
+        root = self._effective_root(workspace_root)
+
         if not self._has_waited_for_cross_file_references:
             # Some LS require waiting for a while before they can return cross-file references.
             # This is a workaround for such LS that don't have a reliable "finished initializing" signal.
             sleep(self._get_wait_time_for_cross_file_referencing())
             self._has_waited_for_cross_file_references = True
 
-        with self.open_file(relative_file_path):
+        with self.open_file(relative_file_path, workspace_root):
             try:
-                response = self._send_references_request(relative_file_path, line=line, column=column)
+                response = self._send_references_request(relative_file_path, line=line, column=column, workspace_root=workspace_root)
             except Exception as e:
                 # Catch LSP internal error (-32603) and raise a more informative exception
                 if isinstance(e, LSPError) and getattr(e, "code", None) == -32603:
@@ -889,15 +924,18 @@ class SolidLanguageServer(ABC):
             assert LSPConstants.RANGE in item
 
             abs_path = PathUtils.uri_to_path(item[LSPConstants.URI])  # type: ignore
-            if not Path(abs_path).is_relative_to(self.repository_root_path):
+            # COMMON-POST-1: Filter using workspace_root instead of repository_root_path
+            if not Path(abs_path).is_relative_to(root):
                 log.warning(
-                    "Found a reference in a path outside the repository, probably the LS is parsing things in installed packages or in the standardlib! "
+                    "Found a reference in a path outside the workspace, probably the LS is parsing things in installed packages or in the standardlib! "
                     f"Path: {abs_path}. This is a bug but we currently simply skip these references."
                 )
                 continue
 
-            rel_path = Path(abs_path).relative_to(self.repository_root_path)
-            if self.is_ignored_path(str(rel_path)):
+            # COMMON-POST-2: Compute relativePath using workspace_root
+            rel_path = Path(abs_path).relative_to(root)
+            # POST-RR-3: Pass workspace_root to is_ignored_path
+            if self.is_ignored_path(str(rel_path), workspace_root):
                 log.debug("Ignoring reference in %s since it should be ignored", rel_path)
                 continue
 
@@ -909,12 +947,13 @@ class SolidLanguageServer(ABC):
 
         return ret
 
-    def request_text_document_diagnostics(self, relative_file_path: str) -> list[ls_types.Diagnostic]:
+    def request_text_document_diagnostics(self, relative_file_path: str, workspace_root: str) -> list[ls_types.Diagnostic]:
         """
         Raise a [textDocument/diagnostic](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_diagnostic) request to the Language Server
         to find diagnostics for the given file. Wait for the response and return the result.
 
         :param relative_file_path: The relative path of the file to retrieve diagnostics for
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
 
         :return: A list of diagnostics for the file
         """
@@ -922,11 +961,15 @@ class SolidLanguageServer(ABC):
             log.error("request_text_document_diagnostics called before Language Server started")
             raise SolidLSPException("Language Server not started")
 
-        with self.open_file(relative_file_path):
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
+        with self.open_file(relative_file_path, workspace_root):
             response = self.server.send.text_document_diagnostic(
                 {
                     LSPConstants.TEXT_DOCUMENT: {  # type: ignore
-                        LSPConstants.URI: pathlib.Path(str(PurePath(self.repository_root_path, relative_file_path))).as_uri()
+                        # COMMON-POST-1, INV-01: Use _resolve_uri instead of repository_root_path
+                        LSPConstants.URI: self._resolve_uri(workspace_root, relative_file_path)
                     }
                 }
             )
@@ -938,7 +981,8 @@ class SolidLanguageServer(ABC):
         ret: list[ls_types.Diagnostic] = []
         for item in response["items"]:  # type: ignore
             new_item: ls_types.Diagnostic = {
-                "uri": pathlib.Path(str(PurePath(self.repository_root_path, relative_file_path))).as_uri(),
+                # COMMON-POST-1: Use _resolve_uri
+                "uri": self._resolve_uri(workspace_root, relative_file_path),
                 "severity": item["severity"],
                 "message": item["message"],
                 "range": item["range"],
@@ -948,29 +992,39 @@ class SolidLanguageServer(ABC):
 
         return ret
 
-    def retrieve_full_file_content(self, file_path: str) -> str:
+    def retrieve_full_file_content(self, file_path: str, workspace_root: str) -> str:
         """
         Retrieve the full content of the given file.
+
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         """
+        # COMMON-ERRORS-1: Validate workspace_root
+        root = self._effective_root(workspace_root)
+
+        # COMMON-POST-1: Compute relative path using workspace_root
         if os.path.isabs(file_path):
-            file_path = os.path.relpath(file_path, self.repository_root_path)
-        with self.open_file(file_path) as file_data:
+            file_path = os.path.relpath(file_path, root)
+        with self.open_file(file_path, workspace_root) as file_data:
             return file_data.contents
 
     def retrieve_content_around_line(
-        self, relative_file_path: str, line: int, context_lines_before: int = 0, context_lines_after: int = 0
+        self, relative_file_path: str, line: int, workspace_root: str, context_lines_before: int = 0, context_lines_after: int = 0
     ) -> MatchedConsecutiveLines:
         """
         Retrieve the content of the given file around the given line.
 
         :param relative_file_path: The relative path of the file to retrieve the content from
         :param line: The line number to retrieve the content around
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :param context_lines_before: The number of lines to retrieve before the given line
         :param context_lines_after: The number of lines to retrieve after the given line
 
         :return MatchedConsecutiveLines: A container with the desired lines.
         """
-        with self.open_file(relative_file_path) as file_data:
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
+        with self.open_file(relative_file_path, workspace_root) as file_data:
             file_contents = file_data.contents
         return MatchedConsecutiveLines.from_file_contents(
             file_contents,
@@ -981,7 +1035,7 @@ class SolidLanguageServer(ABC):
         )
 
     def request_completions(
-        self, relative_file_path: str, line: int, column: int, allow_incomplete: bool = False
+        self, relative_file_path: str, line: int, column: int, workspace_root: str, allow_incomplete: bool = False
     ) -> list[ls_types.CompletionItem]:
         """
         Raise a [textDocument/completion](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_completion) request to the Language Server
@@ -990,11 +1044,16 @@ class SolidLanguageServer(ABC):
         :param relative_file_path: The relative path of the file that has the symbol for which completions should be looked up
         :param line: The line number of the symbol
         :param column: The column number of the symbol
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
 
         :return: A list of completions
         """
-        with self.open_file(relative_file_path):
-            open_file_buffer = self.open_file_buffers[pathlib.Path(os.path.join(self.repository_root_path, relative_file_path)).as_uri()]
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
+        with self.open_file(relative_file_path, workspace_root):
+            # COMMON-POST-1, INV-01: Use _resolve_uri instead of repository_root_path
+            open_file_buffer = self.open_file_buffers[self._resolve_uri(workspace_root, relative_file_path)]
             completion_params: LSPTypes.CompletionParams = {
                 "position": {"line": line, "character": column},
                 "textDocument": {"uri": open_file_buffer.uri},
@@ -1067,13 +1126,14 @@ class SolidLanguageServer(ABC):
             return [json.loads(json_repr) for json_repr in set(json.dumps(item, sort_keys=True) for item in completions_list)]
 
     def _request_document_symbols(
-        self, relative_file_path: str, file_data: LSPFileBuffer | None
+        self, relative_file_path: str, workspace_root: str, file_data: LSPFileBuffer | None
     ) -> list[SymbolInformation] | list[DocumentSymbol] | None:
         """
         Sends a [documentSymbol](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_documentSymbol)
         request to the language server to find symbols in the given file - or returns a cached result if available.
 
         :param relative_file_path: the relative path of the file that has the symbols.
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :param file_data: the file data buffer, if already opened. If None, the file will be opened in this method.
         :return: the list of root symbols in the file.
         """
@@ -1092,8 +1152,8 @@ class SolidLanguageServer(ABC):
             return None
 
         def get_raw_document_symbols(fd: LSPFileBuffer) -> list[SymbolInformation] | list[DocumentSymbol] | None:
-            # check for cached result
-            cache_key = relative_file_path
+            # check for cached result (INV-04: cache key includes workspace_root)
+            cache_key = self._make_cache_key(workspace_root, relative_file_path)
             response = get_cached_raw_document_symbols(cache_key, fd)
             if response is not None:
                 return response
@@ -1101,7 +1161,8 @@ class SolidLanguageServer(ABC):
             # no cached result, query language server
             log.debug(f"Requesting document symbols for {relative_file_path} from the Language Server")
             response = self.server.send.document_symbol(
-                {"textDocument": {"uri": pathlib.Path(os.path.join(self.repository_root_path, relative_file_path)).as_uri()}}
+                # COMMON-POST-1, INV-01: Use _resolve_uri instead of repository_root_path
+                {"textDocument": {"uri": self._resolve_uri(workspace_root, relative_file_path)}}
             )
 
             # update cache
@@ -1113,14 +1174,15 @@ class SolidLanguageServer(ABC):
         if file_data is not None:
             return get_raw_document_symbols(file_data)
         else:
-            with self.open_file(relative_file_path) as opened_file_data:
+            with self.open_file(relative_file_path, workspace_root) as opened_file_data:
                 return get_raw_document_symbols(opened_file_data)
 
-    def request_document_symbols(self, relative_file_path: str, file_buffer: LSPFileBuffer | None = None) -> DocumentSymbols:
+    def request_document_symbols(self, relative_file_path: str, workspace_root: str, file_buffer: LSPFileBuffer | None = None) -> DocumentSymbols:
         """
         Retrieves the collection of symbols in the given file
 
         :param relative_file_path: The relative path of the file that has the symbols
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :param file_buffer: an optional file buffer if the file is already opened.
         :return: the collection of symbols in the file.
             All contained symbols will have a location, children, and a parent attribute,
@@ -1129,9 +1191,12 @@ class SolidLanguageServer(ABC):
             where the parent attribute will be the file symbol which in turn may have a package symbol as parent.
             If you need a symbol tree that contains file symbols as well, you should use `request_full_symbol_tree` instead.
         """
-        with self._open_file_context(relative_file_path, file_buffer) as file_data:
-            # check if the desired result is cached
-            cache_key = relative_file_path
+        # COMMON-ERRORS-1: Validate workspace_root
+        root = self._effective_root(workspace_root)
+
+        with self._open_file_context(relative_file_path, workspace_root, file_buffer) as file_data:
+            # check if the desired result is cached (INV-04: cache key includes workspace_root)
+            cache_key = self._make_cache_key(workspace_root, relative_file_path)
             file_hash_and_result = self._document_symbols_cache.get(cache_key)
             if file_hash_and_result is not None:
                 file_hash, document_symbols = file_hash_and_result
@@ -1144,7 +1209,7 @@ class SolidLanguageServer(ABC):
                 log.debug("No cache hit for document symbols in %s", relative_file_path)
 
             # no cached result: request the root symbols from the language server
-            root_symbols = self._request_document_symbols(relative_file_path, file_data)
+            root_symbols = self._request_document_symbols(relative_file_path, workspace_root, file_data)
 
             if root_symbols is None:
                 log.warning(
@@ -1169,11 +1234,12 @@ class SolidLanguageServer(ABC):
                 """
                 # noinspection PyInvalidCast
                 item = cast(ls_types.UnifiedSymbolInformation, dict(original_symbol_dict))
-                absolute_path = os.path.join(self.repository_root_path, relative_file_path)
+                # COMMON-POST-1, INV-01: Use _resolve_path and _resolve_uri instead of repository_root_path
+                absolute_path = str(self._resolve_path(workspace_root, relative_file_path))
 
                 # handle missing location and path entries
                 if "location" not in item:
-                    uri = pathlib.Path(absolute_path).as_uri()
+                    uri = self._resolve_uri(workspace_root, relative_file_path)
                     assert "range" in item
                     tree_location = ls_types.Location(
                         uri=uri,
@@ -1189,7 +1255,7 @@ class SolidLanguageServer(ABC):
                     location["relativePath"] = relative_file_path  # type: ignore
 
                 if "body" not in item:
-                    item["body"] = self.retrieve_symbol_body(item, file_lines=file_lines)
+                    item["body"] = self.retrieve_symbol_body(item, workspace_root, file_lines=file_lines)
 
                 # handle missing selectionRange
                 if "selectionRange" not in item:
@@ -1236,7 +1302,7 @@ class SolidLanguageServer(ABC):
 
             return document_symbols
 
-    def request_full_symbol_tree(self, within_relative_path: str | None = None) -> list[ls_types.UnifiedSymbolInformation]:
+    def request_full_symbol_tree(self, within_relative_path: str | None = None, *, workspace_root: str) -> list[ls_types.UnifiedSymbolInformation]:
         """
         Will go through all files in the project or within a relative path and build a tree of symbols.
         Note: this may be slow the first time it is called, especially if `within_relative_path` is not used to restrict the search.
@@ -1251,26 +1317,31 @@ class SolidLanguageServer(ABC):
         :param within_relative_path: pass a relative path to only consider symbols within this path.
             If a file is passed, only the symbols within this file will be considered.
             If a directory is passed, all files within this directory will be considered.
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :return: A list of root symbols representing the top-level packages/modules in the project.
         """
+        # COMMON-ERRORS-1: Validate workspace_root
+        effective_root = self._effective_root(workspace_root)
+        effective_root_str = str(effective_root)
+
         if within_relative_path is not None:
-            within_abs_path = os.path.join(self.repository_root_path, within_relative_path)
+            within_abs_path = str(self._resolve_path(workspace_root, within_relative_path))
             if not os.path.exists(within_abs_path):
                 raise FileNotFoundError(f"File or directory not found: {within_abs_path}")
             if os.path.isfile(within_abs_path):
-                if self.is_ignored_path(within_relative_path):
+                if self.is_ignored_path(within_relative_path, workspace_root):
                     log.error("You passed a file explicitly, but it is ignored. This is probably an error. File: %s", within_relative_path)
                     return []
                 else:
-                    root_nodes = self.request_document_symbols(within_relative_path).root_symbols
+                    root_nodes = self.request_document_symbols(within_relative_path, workspace_root).root_symbols
                     return root_nodes
 
         # Helper function to recursively process directories
         def process_directory(rel_dir_path: str) -> list[ls_types.UnifiedSymbolInformation]:
-            abs_dir_path = self.repository_root_path if rel_dir_path == "." else os.path.join(self.repository_root_path, rel_dir_path)
+            abs_dir_path = effective_root_str if rel_dir_path == "." else os.path.join(effective_root_str, rel_dir_path)
             abs_dir_path = os.path.realpath(abs_dir_path)
 
-            if self.is_ignored_path(str(Path(abs_dir_path).relative_to(self.repository_root_path))):
+            if self.is_ignored_path(str(Path(abs_dir_path).relative_to(effective_root_str)), workspace_root):
                 log.debug("Skipping directory: %s (because it should be ignored)", rel_dir_path)
                 return []
 
@@ -1288,7 +1359,7 @@ class SolidLanguageServer(ABC):
                     uri=str(pathlib.Path(abs_dir_path).as_uri()),
                     range={"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}},
                     absolutePath=str(abs_dir_path),
-                    relativePath=str(Path(abs_dir_path).resolve().relative_to(self.repository_root_path)),
+                    relativePath=str(Path(abs_dir_path).resolve().relative_to(effective_root_str)),
                 ),
                 children=[],
             )
@@ -1300,7 +1371,7 @@ class SolidLanguageServer(ABC):
                 # obtain relative path
                 try:
                     contained_dir_or_file_rel_path = str(
-                        Path(contained_dir_or_file_abs_path).resolve().relative_to(self.repository_root_path)
+                        Path(contained_dir_or_file_abs_path).resolve().relative_to(effective_root_str)
                     )
                 except ValueError as e:
                     # Typically happens when the path is not under the repository root (e.g., symlink pointing outside)
@@ -1312,7 +1383,7 @@ class SolidLanguageServer(ABC):
                     )
                     continue
 
-                if self.is_ignored_path(contained_dir_or_file_rel_path):
+                if self.is_ignored_path(contained_dir_or_file_rel_path, workspace_root):
                     log.debug("Skipping item: %s (because it should be ignored)", contained_dir_or_file_rel_path)
                     continue
 
@@ -1323,8 +1394,8 @@ class SolidLanguageServer(ABC):
                         child["parent"] = package_symbol
 
                 elif os.path.isfile(contained_dir_or_file_abs_path):
-                    with self._open_file_context(contained_dir_or_file_rel_path) as file_data:
-                        document_symbols = self.request_document_symbols(contained_dir_or_file_rel_path, file_data)
+                    with self._open_file_context(contained_dir_or_file_rel_path, workspace_root) as file_data:
+                        document_symbols = self.request_document_symbols(contained_dir_or_file_rel_path, workspace_root, file_data)
                         file_root_nodes = document_symbols.root_symbols
 
                         # Create file symbol, link with children
@@ -1338,7 +1409,7 @@ class SolidLanguageServer(ABC):
                                 uri=str(pathlib.Path(contained_dir_or_file_abs_path).as_uri()),
                                 range=file_range,
                                 absolutePath=str(contained_dir_or_file_abs_path),
-                                relativePath=str(Path(contained_dir_or_file_abs_path).resolve().relative_to(self.repository_root_path)),
+                                relativePath=str(Path(contained_dir_or_file_abs_path).resolve().relative_to(effective_root_str)),
                             ),
                             children=file_root_nodes,
                             parent=package_symbol,
@@ -1356,7 +1427,7 @@ class SolidLanguageServer(ABC):
                                 path = Path(node["location"]["relativePath"])  # type: ignore
                                 if path.is_absolute():
                                     try:
-                                        path = path.relative_to(self.repository_root_path)
+                                        path = path.relative_to(effective_root_str)
                                         node["location"]["relativePath"] = str(path)
                                     except Exception:
                                         pass
@@ -1381,13 +1452,18 @@ class SolidLanguageServer(ABC):
         end_column = len(lines[-1])
         return ls_types.Range(start=ls_types.Position(line=0, character=0), end=ls_types.Position(line=end_line, character=end_column))
 
-    def request_dir_overview(self, relative_dir_path: str) -> dict[str, list[UnifiedSymbolInformation]]:
+    def request_dir_overview(self, relative_dir_path: str, workspace_root: str) -> dict[str, list[UnifiedSymbolInformation]]:
         """
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :return: A mapping of all relative paths analyzed to lists of top-level symbols in the corresponding file.
         """
-        symbol_tree = self.request_full_symbol_tree(relative_dir_path)
+        # POST-DO-2: Delegate to request_full_symbol_tree with workspace_root
+        symbol_tree = self.request_full_symbol_tree(relative_dir_path, workspace_root=workspace_root)
         # Initialize result dictionary
         result: dict[str, list[UnifiedSymbolInformation]] = defaultdict(list)
+
+        # COMMON-POST-1: Use workspace_root instead of repository_root_path
+        workspace_root_resolved = self._effective_root(workspace_root)
 
         # Helper function to process a symbol and its children
         def process_symbol(symbol: ls_types.UnifiedSymbolInformation) -> None:
@@ -1396,11 +1472,11 @@ class SolidLanguageServer(ABC):
                 for child in symbol["children"]:
                     # Handle cross-platform path resolution (fixes Docker/macOS path issues)
                     absolute_path = Path(child["location"]["absolutePath"]).resolve()
-                    repository_root = Path(self.repository_root_path).resolve()
 
                     # Try pathlib first, fallback to alternative approach if paths are incompatible
                     try:
-                        path = absolute_path.relative_to(repository_root)
+                        # POST-DO-1: Compute relativePath relative to workspace_root
+                        path = absolute_path.relative_to(workspace_root_resolved)
                     except ValueError:
                         # If paths are from different roots (e.g., /workspaces vs /Users),
                         # use the relativePath from location if available, or extract from absolutePath
@@ -1428,30 +1504,36 @@ class SolidLanguageServer(ABC):
             process_symbol(root)
         return result
 
-    def request_document_overview(self, relative_file_path: str) -> list[UnifiedSymbolInformation]:
+    def request_document_overview(self, relative_file_path: str, workspace_root: str) -> list[UnifiedSymbolInformation]:
         """
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :return: the top-level symbols in the given file.
         """
-        return self.request_document_symbols(relative_file_path).root_symbols
+        return self.request_document_symbols(relative_file_path, workspace_root).root_symbols
 
-    def request_overview(self, within_relative_path: str) -> dict[str, list[UnifiedSymbolInformation]]:
+    def request_overview(self, within_relative_path: str, workspace_root: str) -> dict[str, list[UnifiedSymbolInformation]]:
         """
         An overview of all symbols in the given file or directory.
 
         :param within_relative_path: the relative path to the file or directory to get the overview of.
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :return: A mapping of all relative paths analyzed to lists of top-level symbols in the corresponding file.
         """
-        abs_path = (Path(self.repository_root_path) / within_relative_path).resolve()
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
+        # COMMON-POST-1, INV-01: Use _resolve_path instead of repository_root_path
+        abs_path = self._resolve_path(workspace_root, within_relative_path)
         if not abs_path.exists():
             raise FileNotFoundError(f"File or directory not found: {abs_path}")
 
         if abs_path.is_file():
-            symbols_overview = self.request_document_overview(within_relative_path)
+            symbols_overview = self.request_document_overview(within_relative_path, workspace_root)
             return {within_relative_path: symbols_overview}
         else:
-            return self.request_dir_overview(within_relative_path)
+            return self.request_dir_overview(within_relative_path, workspace_root)
 
-    def request_hover(self, relative_file_path: str, line: int, column: int) -> ls_types.Hover | None:
+    def request_hover(self, relative_file_path: str, line: int, column: int, workspace_root: str) -> ls_types.Hover | None:
         """
         Raise a [textDocument/hover](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#textDocument_hover) request to the Language Server
         to find the hover information at the given line and column in the given file. Wait for the response and return the result.
@@ -1459,13 +1541,18 @@ class SolidLanguageServer(ABC):
         :param relative_file_path: The relative path of the file that has the hover information
         :param line: The line number of the symbol
         :param column: The column number of the symbol
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
 
         :return None
         """
-        with self.open_file(relative_file_path):
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
+        with self.open_file(relative_file_path, workspace_root):
             response = self.server.send.hover(
                 {
-                    "textDocument": {"uri": pathlib.Path(os.path.join(self.repository_root_path, relative_file_path)).as_uri()},
+                    # COMMON-POST-1, INV-01: Use _resolve_uri instead of repository_root_path
+                    "textDocument": {"uri": self._resolve_uri(workspace_root, relative_file_path)},
                     "position": {
                         "line": line,
                         "character": column,
@@ -1483,22 +1570,29 @@ class SolidLanguageServer(ABC):
     def retrieve_symbol_body(
         self,
         symbol: ls_types.UnifiedSymbolInformation | LSPTypes.SymbolInformation,
+        workspace_root: str,
         file_lines: list[str] | None = None,
         file_buffer: LSPFileBuffer | None = None,
     ) -> str:
         """
         Load the body of the given symbol. If the body is already contained in the symbol, just return it.
+
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         """
         existing_body = symbol.get("body", None)
         if existing_body:
             return str(existing_body)
+
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
 
         assert "location" in symbol
         symbol_start_line = symbol["location"]["range"]["start"]["line"]
         symbol_end_line = symbol["location"]["range"]["end"]["line"]
         assert "relativePath" in symbol["location"]
         if file_lines is None:
-            with self._open_file_context(symbol["location"]["relativePath"], file_buffer) as f:  # type: ignore
+            # POST-SB-1: Pass workspace_root to _open_file_context
+            with self._open_file_context(symbol["location"]["relativePath"], workspace_root, file_buffer) as f:  # type: ignore
                 file_lines = f.split_lines()
         symbol_body = "\n".join(file_lines[symbol_start_line : symbol_end_line + 1])
 
@@ -1512,6 +1606,7 @@ class SolidLanguageServer(ABC):
         relative_file_path: str,
         line: int,
         column: int,
+        workspace_root: str,
         include_imports: bool = True,
         include_self: bool = False,
         include_body: bool = False,
@@ -1525,6 +1620,7 @@ class SolidLanguageServer(ABC):
         :param relative_file_path: The relative path to the file.
         :param line: The 0-indexed line number.
         :param column: The 0-indexed column number.
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :param include_imports: whether to also include imports as references.
             Unfortunately, the LSP does not have an import type, so the references corresponding to imports
             will not be easily distinguishable from definitions.
@@ -1535,12 +1631,15 @@ class SolidLanguageServer(ABC):
             is often a fallback mechanism for when the reference cannot be resolved to a symbol.
         :return: List of objects containing the symbol and the location of the reference.
         """
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
         if not self.server_started:
             log.error("request_referencing_symbols called before Language Server started")
             raise SolidLSPException("Language Server not started")
 
         # First, get all references to the symbol
-        references = self.request_references(relative_file_path, line, column)
+        references = self.request_references(relative_file_path, line, column, workspace_root)
         if not references:
             return []
 
@@ -1553,9 +1652,9 @@ class SolidLanguageServer(ABC):
             ref_line = ref["range"]["start"]["line"]
             ref_col = ref["range"]["start"]["character"]
 
-            with self.open_file(ref_path) as file_data:
+            with self.open_file(ref_path, workspace_root) as file_data:
                 # Get the containing symbol for this reference
-                containing_symbol = self.request_containing_symbol(ref_path, ref_line, ref_col, include_body=include_body)
+                containing_symbol = self.request_containing_symbol(ref_path, ref_line, ref_col, workspace_root, include_body=include_body)
                 if containing_symbol is None:
                     # TODO: HORRIBLE HACK! I don't know how to do it better for now...
                     # THIS IS BOUND TO BREAK IN MANY CASES! IT IS ALSO SPECIFIC TO PYTHON!
@@ -1573,7 +1672,7 @@ class SolidLanguageServer(ABC):
                     ref_text = file_data.contents.split("\n")[ref_line]
                     if "." in ref_text:
                         containing_symbol_name = ref_text.split(".")[0]
-                        document_symbols = self.request_document_symbols(ref_path)
+                        document_symbols = self.request_document_symbols(ref_path, workspace_root)
                         for symbol in document_symbols.iter_symbols():
                             if symbol["name"] == containing_symbol_name and symbol["kind"] == ls_types.SymbolKind.Variable:
                                 containing_symbol = copy(symbol)
@@ -1585,16 +1684,17 @@ class SolidLanguageServer(ABC):
                 if containing_symbol is None and include_file_symbols:
                     log.warning(f"Could not find containing symbol for {ref_path}:{ref_line}:{ref_col}. Returning file symbol instead")
                     fileRange = self._get_range_from_file_content(file_data.contents)
+                    ref_abs_path = str(self._resolve_path(workspace_root, ref_path))
                     location = ls_types.Location(
-                        uri=str(pathlib.Path(os.path.join(self.repository_root_path, ref_path)).as_uri()),
+                        uri=str(pathlib.Path(ref_abs_path).as_uri()),
                         range=fileRange,
-                        absolutePath=str(os.path.join(self.repository_root_path, ref_path)),
+                        absolutePath=ref_abs_path,
                         relativePath=ref_path,
                     )
                     name = os.path.splitext(os.path.basename(ref_path))[0]
 
                     if include_body:
-                        body = self.retrieve_full_file_content(ref_path)
+                        body = self.retrieve_full_file_content(ref_path, workspace_root)
                     else:
                         body = ""
 
@@ -1650,7 +1750,8 @@ class SolidLanguageServer(ABC):
         self,
         relative_file_path: str,
         line: int,
-        column: int | None = None,
+        column: int | None,
+        workspace_root: str,
         strict: bool = False,
         include_body: bool = False,
     ) -> ls_types.UnifiedSymbolInformation | None:
@@ -1673,6 +1774,7 @@ class SolidLanguageServer(ABC):
         :param line: The 0-indexed line number.
         :param column: The 0-indexed column (also called character). If not passed, the lookup will be based
             only on the line.
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :param strict: If True, the position must be strictly within the range of the symbol.
             Setting to True is useful for example for finding the parent of a symbol, as with strict=False,
             and the line pointing to a symbol itself, the containing symbol will be the symbol itself
@@ -1680,15 +1782,18 @@ class SolidLanguageServer(ABC):
         :param include_body: Whether to include the body of the symbol in the result.
         :return: The container symbol (if found) or None.
         """
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
         # checking if the line is empty, unfortunately ugly and duplicating code, but I don't want to refactor
-        with self.open_file(relative_file_path):
-            absolute_file_path = str(PurePath(self.repository_root_path, relative_file_path))
+        with self.open_file(relative_file_path, workspace_root):
+            absolute_file_path = str(self._resolve_path(workspace_root, relative_file_path))
             content = FileUtils.read_file(absolute_file_path, self._encoding)
             if content.split("\n")[line].strip() == "":
                 log.error(f"Passing empty lines to request_container_symbol is currently not supported, {relative_file_path=}, {line=}")
                 return None
 
-        document_symbols = self.request_document_symbols(relative_file_path)
+        document_symbols = self.request_document_symbols(relative_file_path, workspace_root)
 
         # make jedi and pyright api compatible
         # the former has no location, the later has no range
@@ -1752,22 +1857,26 @@ class SolidLanguageServer(ABC):
             # Return the one with the greatest starting position (i.e. the innermost container).
             containing_symbol = max(containing_symbols, key=lambda s: s["location"]["range"]["start"]["line"])
             if include_body:
-                containing_symbol["body"] = self.retrieve_symbol_body(containing_symbol)
+                containing_symbol["body"] = self.retrieve_symbol_body(containing_symbol, workspace_root)
             return containing_symbol
         else:
             return None
 
     def request_container_of_symbol(
-        self, symbol: ls_types.UnifiedSymbolInformation, include_body: bool = False
+        self, symbol: ls_types.UnifiedSymbolInformation, workspace_root: str, include_body: bool = False
     ) -> ls_types.UnifiedSymbolInformation | None:
         """
         Finds the container of the given symbol if there is one. If the parent attribute is present, the parent is returned
         without further searching.
 
         :param symbol: The symbol to find the container of.
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :param include_body: whether to include the body of the symbol in the result.
         :return: The container of the given symbol or None if no container is found.
         """
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
         if "parent" in symbol:
             return symbol["parent"]
         assert "location" in symbol, f"Symbol {symbol} has no location and no parent attribute"
@@ -1775,6 +1884,7 @@ class SolidLanguageServer(ABC):
             symbol["location"]["relativePath"],  # type: ignore
             symbol["location"]["range"]["start"]["line"],
             symbol["location"]["range"]["start"]["character"],
+            workspace_root,
             strict=True,
             include_body=include_body,
         )
@@ -1801,6 +1911,7 @@ class SolidLanguageServer(ABC):
         relative_file_path: str,
         line: int,
         column: int,
+        workspace_root: str,
         include_body: bool = False,
     ) -> ls_types.UnifiedSymbolInformation | None:
         """
@@ -1812,15 +1923,19 @@ class SolidLanguageServer(ABC):
         :param relative_file_path: The relative path to the file.
         :param line: The 0-indexed line number.
         :param column: The 0-indexed column number.
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :param include_body: whether to include the body of the symbol in the result.
         :return: The symbol information for the definition, or None if not found.
         """
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
         if not self.server_started:
             log.error("request_defining_symbol called before language server started")
             raise SolidLSPException("Language Server not started")
 
         # Get the definition location(s)
-        definitions = self.request_definition(relative_file_path, line, column)
+        definitions = self.request_definition(relative_file_path, line, column, workspace_root)
         if not definitions:
             return None
 
@@ -1832,7 +1947,7 @@ class SolidLanguageServer(ABC):
         def_col = definition["range"]["start"]["character"]
 
         # Find the symbol at or containing this location
-        defining_symbol = self.request_containing_symbol(def_path, def_line, def_col, strict=False, include_body=include_body)
+        defining_symbol = self.request_containing_symbol(def_path, def_line, def_col, workspace_root, strict=False, include_body=include_body)
 
         return defining_symbol
 
@@ -1941,15 +2056,19 @@ class SolidLanguageServer(ABC):
         self._save_raw_document_symbols_cache()
         self._save_document_symbols_cache()
 
-    def request_workspace_symbol(self, query: str) -> list[ls_types.UnifiedSymbolInformation] | None:
+    def request_workspace_symbol(self, query: str, workspace_root: str) -> list[ls_types.UnifiedSymbolInformation] | None:
         """
         Raise a [workspace/symbol](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#workspace_symbol) request to the Language Server
         to find symbols across the whole workspace. Wait for the response and return the result.
 
         :param query: The query string to filter symbols by
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
 
         :return: A list of matching symbols
         """
+        # COMMON-ERRORS-1: Validate workspace_root
+        root = self._effective_root(workspace_root)
+
         response = self.server.send.workspace_symbol({"query": query})
         if response is None:
             return None
@@ -1964,6 +2083,10 @@ class SolidLanguageServer(ABC):
             assert LSPConstants.KIND in item
             assert LSPConstants.LOCATION in item
 
+            # POST-WS-1: Compute relativePath relative to workspace_root
+            if "location" in item and "absolutePath" in item["location"]:
+                item["location"]["relativePath"] = str(Path(item["location"]["absolutePath"]).relative_to(root))
+
             ret.append(ls_types.UnifiedSymbolInformation(**item))  # type: ignore
 
         return ret
@@ -1974,6 +2097,7 @@ class SolidLanguageServer(ABC):
         line: int,
         column: int,
         new_name: str,
+        workspace_root: str,
     ) -> ls_types.WorkspaceEdit | None:
         """
         Retrieve a WorkspaceEdit for renaming the symbol at the given location to the new name.
@@ -1983,11 +2107,16 @@ class SolidLanguageServer(ABC):
         :param line: The 0-indexed line number of the symbol
         :param column: The 0-indexed column number of the symbol
         :param new_name: The new name for the symbol
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         :return: A WorkspaceEdit containing the changes needed to rename the symbol, or None if rename is not supported
         """
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
         params = RenameParams(
             textDocument=ls_types.TextDocumentIdentifier(
-                uri=pathlib.Path(os.path.join(self.repository_root_path, relative_file_path)).as_uri()
+                # COMMON-POST-1, INV-01: Use _resolve_uri instead of repository_root_path
+                uri=self._resolve_uri(workspace_root, relative_file_path)
             ),
             position=ls_types.Position(line=line, character=column),
             newName=new_name,
@@ -1995,14 +2124,18 @@ class SolidLanguageServer(ABC):
 
         return self.server.send.rename(params)
 
-    def apply_text_edits_to_file(self, relative_path: str, edits: list[ls_types.TextEdit]) -> None:
+    def apply_text_edits_to_file(self, relative_path: str, edits: list[ls_types.TextEdit], workspace_root: str) -> None:
         """
         Apply a list of text edits to a file.
 
         :param relative_path: The relative path of the file to edit
         :param edits: List of TextEdit dictionaries to apply
+        :param workspace_root: Absolute path to workspace root (MANDATORY per INV-02)
         """
-        with self.open_file(relative_path):
+        # COMMON-ERRORS-1: Validate workspace_root
+        self._effective_root(workspace_root)
+
+        with self.open_file(relative_path, workspace_root):
             # Sort edits by position (latest first) to avoid position shifts
             sorted_edits = sorted(edits, key=lambda e: (e["range"]["start"]["line"], e["range"]["start"]["character"]), reverse=True)
 
@@ -2011,8 +2144,8 @@ class SolidLanguageServer(ABC):
                 end_pos = ls_types.Position(line=edit["range"]["end"]["line"], character=edit["range"]["end"]["character"])
 
                 # Delete the old text and insert the new text
-                self.delete_text_between_positions(relative_path, start_pos, end_pos)
-                self.insert_text_at_position(relative_path, start_pos["line"], start_pos["character"], edit["newText"])
+                self.delete_text_between_positions(relative_path, start_pos, end_pos, workspace_root)
+                self.insert_text_at_position(relative_path, start_pos["line"], start_pos["character"], edit["newText"], workspace_root)
 
     def start(self) -> "SolidLanguageServer":
         """

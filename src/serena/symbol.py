@@ -531,7 +531,7 @@ class LanguageServerSymbolRetriever:
         """
         symbols: list[LanguageServerSymbol] = []
         for lang_server in self._iter_language_servers():
-            symbol_roots = lang_server.request_full_symbol_tree(within_relative_path=within_relative_path)
+            symbol_roots = lang_server.request_full_symbol_tree(within_relative_path=within_relative_path, workspace_root=self.get_root_path())
             for root in symbol_roots:
                 symbols.extend(
                     LanguageServerSymbol(root).find(
@@ -577,7 +577,7 @@ class LanguageServerSymbolRetriever:
         if location.relative_path is None:
             return None
         lang_server = self.get_language_server(location.relative_path)
-        document_symbols = lang_server.request_document_symbols(location.relative_path)
+        document_symbols = lang_server.request_document_symbols(location.relative_path, self.get_root_path())
         for symbol_dict in document_symbols.iter_symbols():
             symbol = LanguageServerSymbol(symbol_dict)
             if symbol.location == location:
@@ -640,6 +640,7 @@ class LanguageServerSymbolRetriever:
             relative_file_path=symbol_location.relative_path,
             line=symbol_location.line,
             column=symbol_location.column,
+            workspace_root=self.get_root_path(),
             include_imports=False,
             include_self=False,
             include_body=include_body,
@@ -662,7 +663,7 @@ class LanguageServerSymbolRetriever:
             For the case where a file is passed, the mapping will contain a single entry.
         """
         lang_server = self.get_language_server(relative_path)
-        path_to_unified_symbols = lang_server.request_overview(relative_path)
+        path_to_unified_symbols = lang_server.request_overview(relative_path, self.get_root_path())
 
         def child_inclusion_predicate(s: LanguageServerSymbol) -> bool:
             return not s.is_low_level()
