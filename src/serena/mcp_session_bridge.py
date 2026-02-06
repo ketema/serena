@@ -98,11 +98,12 @@ class MCPSessionBridge(MCPSessionBridgeContract):
             )
             return
 
-        # Default workspace if none provided
-        if workspace_root is None:
-            workspace_root = Path.cwd()
+        # INV-B1-01: MUST NOT default to Path.cwd() for HTTP mode
+        # INV-B1-02: workspace_root=None is valid (workspace binding happens via activate_project)
+        # POST-B1-01: Session registered with workspace_root=None (as passed)
+        # POST-B1-02: Path.cwd() MUST NOT be used as fallback
 
-        # Register session
+        # Register session (with None workspace if not provided)
         self._session_registry.bind_session(mcp_session_id, workspace_root)
 
         logger.info(f"MCP session created: {mcp_session_id} @ {workspace_root}")

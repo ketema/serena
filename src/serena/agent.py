@@ -848,9 +848,16 @@ class SerenaAgent:
 
         existing_session = self._session_registry.get_session(session_id)
         if existing_session is not None:
-            if Path(existing_session.workspace_root).resolve() != workspace_root.resolve():
+            # INV-B1-03: activate_project is the ONLY mechanism to bind workspace
+            # Handle transitions: None→Path (initial binding) or Path→Path (re-binding)
+            if existing_session.workspace_root is None:
+                # HTTP mode: Session created without workspace, now binding via activate_project
+                self._session_registry.unbind_session(session_id)
+            elif Path(existing_session.workspace_root).resolve() != workspace_root.resolve():
+                # Re-binding to different workspace
                 self._session_registry.unbind_session(session_id)
             else:
+                # Already bound to same workspace, no-op
                 set_current_session(existing_session)
                 return Project.load(workspace_root)
 
@@ -864,9 +871,14 @@ class SerenaAgent:
             set_current_session(None)
             raise ProjectNotFoundError("Failed to load project for session.") from exc
 
-        self._update_active_tools()
-        if self._project_activation_callback is not None:
-            self._project_activation_callback()
+        # INV-B3-01: MUST NOT call _update_active_tools() on shared Agent
+        # INV-B2-01: _active_tools dict MUST NOT be mutated by activate_project
+        # POST-B3-05: _project_activation_callback NOT called (affects all sessions)
+        # POST-B2-02: Shared Agent state unchanged after call
+        #
+        # Tool availability is now computed dynamically per-session via get_active_tools_for_session()
+        # No shared state mutation required.
+
         return project
 
     def deactivate_session(self, session_id: str) -> None:

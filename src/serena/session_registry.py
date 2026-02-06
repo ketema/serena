@@ -27,7 +27,7 @@ class SessionContext:
 
     # REQUIRED FIELDS
     session_id: str  # Unique MCP session identifier
-    workspace_root: Path  # Absolute path to project root
+    workspace_root: Path | None  # Absolute path to project root (None before activate_project in HTTP mode)
     activation_source: Literal["explicit", "auto"]  # How session was activated
     activation_time: datetime  # When session was bound
 
@@ -133,23 +133,27 @@ class SessionRegistry:
     def bind_session(
         self,
         session_id: str,
-        workspace_root: Path,
+        workspace_root: Path | None,
         source: Literal["explicit", "auto"] = "explicit",
     ) -> SessionContext:
         """
         Bind a session to a workspace.
 
         PRE: session_id not already bound
-        PRE: workspace_root.is_absolute() and workspace_root.exists()
+        PRE: if workspace_root not None: workspace_root.is_absolute() and workspace_root.exists()
         POST: get_session(session_id) returns SessionContext
-        POST: returned SessionContext.workspace_root == workspace_root.resolve()
+        POST: returned SessionContext.workspace_root == workspace_root.resolve() (if workspace_root provided)
+        POST: returned SessionContext.workspace_root == None (if workspace_root is None - HTTP mode)
+
+        INV-B1-02: workspace_root=None is valid (session awaits activate_project call)
         """
-        # PRE-2: Validate workspace_root exists
-        if not workspace_root.exists():
+        # PRE-2: Validate workspace_root exists (if provided)
+        # INV-B1-02: None workspace is valid (HTTP mode before activate_project)
+        if workspace_root is not None and not workspace_root.exists():
             raise FileNotFoundError(f"PRE-2 violation: workspace_root does not exist: {workspace_root}")
 
-        # INV-2: Resolve workspace_root to absolute, canonical path
-        resolved_workspace = workspace_root.resolve()
+        # INV-2: Resolve workspace_root to absolute, canonical path (if provided)
+        resolved_workspace = workspace_root.resolve() if workspace_root is not None else None
 
         with self._lock:
             # PRE-1: Check session_id not already bound
@@ -167,10 +171,12 @@ class SessionRegistry:
             # Store session
             self._sessions[session_id] = ctx
 
-            # Track session for workspace
-            if resolved_workspace not in self._workspace_sessions:
-                self._workspace_sessions[resolved_workspace] = []
-            self._workspace_sessions[resolved_workspace].append(session_id)
+            # Track session for workspace (only if workspace is bound)
+            # INV-B1-02: Sessions with None workspace are valid (HTTP mode before activate_project)
+            if resolved_workspace is not None:
+                if resolved_workspace not in self._workspace_sessions:
+                    self._workspace_sessions[resolved_workspace] = []
+                self._workspace_sessions[resolved_workspace].append(session_id)
 
             return ctx
 
@@ -194,8 +200,9 @@ class SessionRegistry:
             # Remove session from registry
             del self._sessions[session_id]
 
-            # Remove from workspace tracking
-            if workspace in self._workspace_sessions:
+            # Remove from workspace tracking (only if session had workspace bound)
+            # INV-B1-02: Sessions with None workspace are not tracked in _workspace_sessions
+            if workspace is not None and workspace in self._workspace_sessions:
                 self._workspace_sessions[workspace].remove(session_id)
 
                 # POST-3: Cleanup if last session for workspace
