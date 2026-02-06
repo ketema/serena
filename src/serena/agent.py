@@ -432,7 +432,7 @@ class SerenaAgent:
         :return: the active project or None if no project is active
         """
         session = get_current_session()
-        if session is None:
+        if session is None or session.workspace_root is None:
             return None
         try:
             return Project.load(session.workspace_root)
@@ -446,6 +446,11 @@ class SerenaAgent:
         session = get_current_session()
         if session is None:
             raise ProjectNotFoundError("No active session. Please activate a project first.")
+        if session.workspace_root is None:
+            raise ProjectNotFoundError(
+                f"Session {session.session_id} has no workspace bound. "
+                "Please call activate_project first."
+            )
         try:
             return Project.load(session.workspace_root)
         except Exception as exc:
@@ -895,7 +900,8 @@ class SerenaAgent:
                     language = Language[lang_name.upper()]
                 except KeyError:
                     continue
-                self.get_lsp_pool().release(language, current.workspace_root, session_id)
+                if current.workspace_root is not None:
+                    self.get_lsp_pool().release(language, current.workspace_root, session_id)
             current.lsp_references.clear()
 
         self._session_registry.unbind_session(session_id)

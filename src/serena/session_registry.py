@@ -28,7 +28,7 @@ class SessionContext:
     # REQUIRED FIELDS
     session_id: str  # Unique MCP session identifier
     workspace_root: Path | None  # Absolute path to project root (None before activate_project in HTTP mode)
-    activation_source: Literal["explicit", "auto"]  # How session was activated
+    activation_source: Literal["explicit", "auto", "anonymous"]  # How session was activated
     activation_time: datetime  # When session was bound
 
     # OPTIONAL FIELDS
@@ -134,7 +134,7 @@ class SessionRegistry:
         self,
         session_id: str,
         workspace_root: Path | None,
-        source: Literal["explicit", "auto"] = "explicit",
+        source: Literal["explicit", "auto", "anonymous"] = "explicit",
     ) -> SessionContext:
         """
         Bind a session to a workspace.
@@ -255,7 +255,7 @@ class SessionRegistry:
                     session_info = {
                         "session_id": ctx.session_id,
                         "workspace_root": str(ctx.workspace_root),
-                        "project_name": ctx.workspace_root.name,
+                        "project_name": ctx.workspace_root.name if ctx.workspace_root is not None else None,
                         "connected_at": ctx.activation_time.isoformat(),
                         "activation_source": ctx.activation_source,
                     }
