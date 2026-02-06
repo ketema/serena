@@ -369,9 +369,31 @@ class StreamableHTTPSessionManager:
         POST-1: Subsequent session creations invoke on_session_created
         POST-2: Subsequent session closures invoke on_session_closed
         POST-3: Replaces any previously set callbacks
+        POST-4: If sessions already exist when on_session_created is set,
+                on_session_created is invoked IMMEDIATELY for each existing session
+                (retroactive registration to handle race condition where session
+                is created before callbacks are wired)
         """
+        # DEBUG: Log when callbacks are being wired
+        logger.info(
+            "Setting session callbacks: on_created=%s, on_closed=%s, active_sessions=%d",
+            on_session_created is not None,
+            on_session_closed is not None,
+            len(self._server_instances),
+        )
         self._on_session_created = on_session_created
         self._on_session_closed = on_session_closed
+
+        # POST-4: Retroactive registration for sessions created before callbacks were wired
+        # This handles the race condition where HTTP transport creates session before
+        # MCPServer lifespan wires callbacks
+        if on_session_created is not None and self._server_instances:
+            for session_id in list(self._server_instances.keys()):
+                logger.info(
+                    "POST-4: Retroactive callback invocation for pre-existing session: %s",
+                    session_id,
+                )
+                on_session_created(session_id)
 
     def _invoke_session_created(self, session_id: str) -> None:
         """
@@ -388,10 +410,23 @@ class StreamableHTTPSessionManager:
 
         ERRORS-1: Callback exceptions propagate
         """
+        # DEBUG: Log callback state at invocation time
+        logger.debug(
+            "Session callback invocation: session_id=%s, callback_set=%s",
+            session_id,
+            self._on_session_created is not None,
+        )
         if self._on_session_created is not None:
             # POST-1: Invoke callback with session_id
             # ERRORS-1: Let exceptions propagate (not swallowed)
+            logger.info("Invoking on_session_created callback for session %s", session_id)
             self._on_session_created(session_id)
+        else:
+            # DEBUG: Log when callback is None (indicates race condition)
+            logger.warning(
+                "on_session_created callback is None for session %s - callbacks not yet wired",
+                session_id,
+            )
 
     def _invoke_session_closed(self, session_id: str) -> None:
         """

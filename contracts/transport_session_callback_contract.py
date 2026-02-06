@@ -89,8 +89,17 @@ class TransportSessionCallbackContract(ABC):
         POST-1: Subsequent session creations invoke on_session_created
         POST-2: Subsequent session closures invoke on_session_closed
         POST-3: Replaces any previously set callbacks
+        POST-4: If sessions already exist when on_session_created is set,
+                on_session_created is invoked IMMEDIATELY for each existing session
+                (retroactive registration to handle race condition where session
+                is created before callbacks are wired)
 
         CALLED FROM: mcp.py server initialization (before first request)
+
+        RACE CONDITION MITIGATION (POST-4):
+        Due to architectural timing where HTTP transport creates sessions before
+        MCPServer lifespan wires callbacks, sessions may exist when this method
+        is called. POST-4 ensures these sessions are not lost.
         """
         ...
 
@@ -224,6 +233,14 @@ CALLBACK_INVOCATION_TEST_CASES = [
     ("session-123", True, True),
     ("session-456", False, False),  # No callback set
     ("", True, False),  # Empty session_id (undefined, but should not crash)
+]
+
+RETROACTIVE_REGISTRATION_TEST_CASES = [
+    # (existing_sessions_before_wiring, expected_callback_invocations)
+    # POST-4: Existing sessions get retroactive callback invocation
+    ([], []),  # No existing sessions → no retroactive calls
+    (["s1"], ["s1"]),  # One existing session → one retroactive call
+    (["s1", "s2", "s3"], ["s1", "s2", "s3"]),  # Multiple → all called
 ]
 
 WIRING_TEST_CASES = [
