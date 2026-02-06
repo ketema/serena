@@ -32,8 +32,9 @@ DESIGN DECISIONS:
     DD-3: Absolute relative_path rejected by _resolve_path (ValueError) — prevents
           bypass of workspace_root parameter.
     DD-4: Cache keys include workspace_root for cross-workspace isolation.
-    DD-5: 35+ LSP subclass files require ZERO changes — they implement
-          _start_server, not path-resolving methods.
+    DD-5: Subclass _start_server implementations require ZERO changes.
+          7 subclass files with method overrides (e.g., request_document_symbols,
+          request_references) MUST update signatures to include workspace_root.
 
 CROSS-REFERENCES:
     - contracts/global_lsp_pool_contract.py (INV-3: multi-root keyed by language)
@@ -95,7 +96,7 @@ class SolidLSPPathResolutionContract(ABC):
     - INV-02: workspace_root is mandatory on all path-resolving methods
     - INV-03: _resolve_path rejects absolute relative_path
     - INV-04: Cache keys include workspace_root
-    - INV-05: Zero subclass changes
+    - INV-05: Zero _start_server changes; 7 subclass overrides updated
     - INV-06: Multi-root LSPs stay shared
     - INV-07: repository_root_path scoped to cache/init/subclass only
     """
