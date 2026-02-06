@@ -492,6 +492,9 @@ class LanguageServerSymbolRetriever:
 
     def get_root_path(self) -> str:
         if self._explicit_language_server is not None:
+            # NOTE: For explicit LSP mode (CLI/single-project), repository_root_path
+            # IS the correct workspace_root because the LSP is not shared across
+            # workspaces. This is an acknowledged exception to CALLER-INV-1.
             return self._explicit_language_server.repository_root_path
         return self.agent.get_active_project_or_raise().project_root
 

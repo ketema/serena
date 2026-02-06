@@ -1374,11 +1374,11 @@ class SolidLanguageServer(ABC):
                         Path(contained_dir_or_file_abs_path).resolve().relative_to(effective_root_str)
                     )
                 except ValueError as e:
-                    # Typically happens when the path is not under the repository root (e.g., symlink pointing outside)
+                    # Typically happens when the path is not under the workspace root (e.g., symlink pointing outside)
                     log.warning(
-                        "Skipping path %s; likely outside of the repository root %s [cause: %s]",
+                        "Skipping path %s; likely outside of workspace root %s [cause: %s]",
                         contained_dir_or_file_abs_path,
-                        self.repository_root_path,
+                        effective_root_str,
                         e,
                     )
                     continue

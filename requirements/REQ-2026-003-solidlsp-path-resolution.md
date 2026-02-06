@@ -51,7 +51,7 @@ Full Actor Responsibility Model: →serena:ccabdd-manifesto
 | INV-02 | Parameter Contract | workspace_root MUST be mandatory (not Optional) on ALL affected public methods |
 | INV-03 | Absolute Path Rejection | _resolve_path MUST raise ValueError if relative_path is absolute |
 | INV-04 | Cache Isolation | Cache keys MUST include workspace_root to prevent cross-workspace pollution |
-| INV-05 | Subclass Safety | 35+ LSP subclass files MUST require ZERO changes |
+| INV-05 | Subclass Safety | Subclass _start_server implementations require ZERO changes; 7 subclass files with method overrides MUST update signatures to include workspace_root |
 | INV-06 | Resource Conservation | Multi-root LSPs MUST remain shared (one instance per language, per CON-3) |
 | INV-07 | repository_root_path Scope | repository_root_path retained ONLY for: cache directory paths, LSP process initialization, subclass _start_server methods |
 

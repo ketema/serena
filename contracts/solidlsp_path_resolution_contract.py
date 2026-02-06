@@ -67,7 +67,11 @@ from typing import Any
 # INV-04: Cache keys MUST include workspace_root to prevent
 #         cross-workspace pollution.
 #
-# INV-05: Subclass files (_start_server implementations) require ZERO changes.
+# INV-05: Subclass _start_server implementations require ZERO changes.
+#         However, 7 subclass files that OVERRIDE public methods (e.g.,
+#         request_document_symbols, request_references) MUST update their
+#         override signatures to include workspace_root: str and thread it
+#         through super() calls and internal method calls.
 #
 # INV-06: Multi-root LSPs remain shared (one instance per language,
 #         per global_lsp_pool_contract.py INV-3).
@@ -583,9 +587,10 @@ class SolidLSPPathResolutionContract(ABC):
         self,
         relative_file_path: str,
         line: int,
-        context_lines: int,
         workspace_root: str,
-    ) -> str:
+        context_lines_before: int = 0,
+        context_lines_after: int = 0,
+    ) -> "MatchedConsecutiveLines":
         """
         Retrieve content around a specific line.
 
