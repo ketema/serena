@@ -468,6 +468,141 @@ class SolidLanguageServer(ABC):
     def _start_server(self) -> None:
         pass
 
+    # =========================================================================
+    # PATH RESOLUTION HELPERS (Contract: solidlsp_path_resolution_contract.py)
+    # =========================================================================
+
+    def _effective_root(self, workspace_root: str) -> Path:
+        """
+        Validate workspace_root and return as Path.
+
+        PRE-1: workspace_root is non-empty string
+        PRE-2: workspace_root is an absolute path
+
+        POST-1: Returns Path(workspace_root)
+        POST-2: Returned Path is absolute
+
+        ERRORS-1: Raises ValueError if workspace_root is empty
+        ERRORS-2: Raises ValueError if workspace_root is not absolute
+
+        INV-02: workspace_root is mandatory (str, not Optional)
+        """
+        # PRE-1: workspace_root must be non-empty
+        if not workspace_root:
+            raise ValueError("ERRORS-1: workspace_root must be non-empty")
+
+        # POST-1: Convert to Path
+        root = Path(workspace_root)
+
+        # PRE-2: workspace_root must be absolute (cross-platform check)
+        # Check both Unix-style (/) and Windows-style (C:/) absolute paths
+        is_absolute = root.is_absolute() or (len(workspace_root) > 2 and workspace_root[1] == ':')
+        
+        if not is_absolute:
+            raise ValueError("ERRORS-2: workspace_root must be an absolute path")
+
+        # POST-2: Returned Path is absolute (guaranteed by PRE-2 check)
+        return root
+
+    def _resolve_path(self, workspace_root: str, relative_path: str) -> Path:
+        """
+        Resolve relative_path against workspace_root.
+
+        Central path resolution method. ALL public methods that construct
+        absolute paths from relative paths MUST delegate to this method.
+
+        PRE-3: workspace_root is non-empty, absolute path
+        PRE-4: relative_path is a relative path (not absolute)
+
+        POST-3: Returns (Path(workspace_root) / relative_path).resolve()
+        POST-4: Returned path starts with workspace_root (no path traversal escape)
+
+        ERRORS-3: Raises ValueError if relative_path is absolute
+                  (INV-03: prevents bypass of workspace_root)
+        ERRORS-4: Raises ValueError if workspace_root is empty or not absolute
+
+        INV-01: Uses workspace_root, never self.repository_root_path
+        """
+        # PRE-3: Delegate workspace_root validation to _effective_root
+        # This enforces ERRORS-4 (propagates from _effective_root)
+        root = self._effective_root(workspace_root)
+
+        # PRE-4: relative_path must be relative (INV-03)
+        # Check for absolute paths in a cross-platform way
+        rel_path = Path(relative_path)
+        if rel_path.is_absolute() or (len(relative_path) > 2 and relative_path[1] == ':'):
+            raise ValueError("ERRORS-3: relative_path must be relative, not absolute (INV-03)")
+
+        # POST-3: Resolve against workspace_root
+        resolved = (root / rel_path).resolve()
+
+        # POST-4: Ensure path stays within workspace_root (security guarantee)
+        # If path traversal caused escape, clamp to workspace_root
+        try:
+            if not resolved.is_relative_to(root):
+                # Path escaped via .. - return workspace_root itself
+                resolved = root
+        except (ValueError, AttributeError):
+            # Fallback for Python < 3.9 without is_relative_to
+            if not str(resolved).startswith(str(root) + '/') and resolved != root:
+                resolved = root
+
+        return resolved
+
+    def _resolve_uri(self, workspace_root: str, relative_path: str) -> str:
+        """
+        Build file:// URI from workspace_root and relative_path.
+
+        PRE-5: workspace_root is non-empty, absolute path
+        PRE-6: relative_path is a relative path (not absolute)
+
+        POST-5: Returns string starting with "file://"
+        POST-6: URI path component equals _resolve_path(workspace_root, relative_path)
+
+        ERRORS-5: Propagates ValueError from _resolve_path if relative_path is absolute
+        ERRORS-6: Propagates ValueError from _effective_root if workspace_root invalid
+
+        INV-01: Uses workspace_root, never self.repository_root_path
+        """
+        # Delegate to _resolve_path (propagates ERRORS-5, ERRORS-6)
+        resolved = self._resolve_path(workspace_root, relative_path)
+
+        # POST-6: Convert to URI using Path.as_uri()
+        uri = resolved.as_uri()
+
+        # POST-5: Verify URI starts with "file://"
+        assert uri.startswith("file://"), f"POST-5 violation: URI must start with 'file://', got {uri}"
+
+        return uri
+
+    def _make_cache_key(self, workspace_root: str, *args) -> str:
+        """
+        Build cache key that includes workspace_root for isolation.
+
+        PRE-7: workspace_root is non-empty string
+
+        POST-7: Returned key contains workspace_root as component
+        POST-8: Two calls with different workspace_root and same args
+                produce DIFFERENT cache keys
+        POST-9: Two calls with same workspace_root and same args
+                produce IDENTICAL cache keys
+
+        INV-04: Cache keys include workspace_root
+        """
+        # PRE-7: workspace_root must be non-empty
+        if not workspace_root:
+            raise ValueError("PRE-7: workspace_root must be non-empty for cache key")
+
+        # POST-7, POST-8, POST-9: Include workspace_root as first component
+        # Use pipe separator to ensure clean parsing
+        components = [workspace_root] + [str(arg) for arg in args]
+        key = "|".join(components)
+
+        # POST-7: Verify workspace_root is in key (guaranteed by construction)
+        assert workspace_root in key, f"POST-7 violation: cache key must contain workspace_root"
+
+        return key
+
     def _get_language_id_for_file(self, relative_file_path: str) -> str:
         """Return the language ID for a file.
 
