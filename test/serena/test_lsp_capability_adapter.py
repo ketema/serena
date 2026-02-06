@@ -35,13 +35,23 @@ def mock_language_server():
     Mock SolidLanguageServer for testing adapter methods.
 
     Contract: contracts/lsp_capability_adapter_contract.py
-    - ls is running SolidLanguageServer instance
-    - ls has workspace roots tracked
+    - PRE-1: ls is running SolidLanguageServer instance
+    - PRE-2: ls has workspace roots tracked
+    - ls.server.notify.did_change_workspace_folders: LSP notification method
+
+    Mock Derivation: This mock is derived from SolidLanguageServer structure
+    where ls.server is SolidLanguageServerHandler and ls.server.notify is
+    LspNotification (see src/solidlsp/ls_handler.py:144).
     """
     ls = MagicMock()
     ls.is_running.return_value = True
     ls.workspace_roots = []
     ls.root_uri = None
+    # Mock the LSP notification path: ls.server.notify.did_change_workspace_folders
+    # This is the actual method called by add_workspace_root/remove_workspace_root
+    ls.server = MagicMock()
+    ls.server.notify = MagicMock()
+    ls.server.notify.did_change_workspace_folders = MagicMock()
     return ls
 
 
@@ -374,20 +384,50 @@ class TestAddWorkspaceRoot:
         self, rust_adapter, mock_language_server
     ):
         """
+        Enforces: POST-3 (On success, LSP now serves paths under root)
+
         WHY: Multi-root LSP should successfully add workspace roots.
-        EXPECTED: add_workspace_root returns True for multi-root adapter.
+        EXPECTED: add_workspace_root returns True AND sends LSP notification.
         """
         mock_language_server.workspace_roots = []
         root = Path("/project-a")
 
         result = rust_adapter.add_workspace_root(mock_language_server, root)
 
+        # POST-3 assertion: Returns True on success
         assert result is True, (
-            f"FAILED: add_workspace_root for multi-root LSP\n"
+            f"POST-3 violation: add_workspace_root did not return True\n"
             f"WHY: Multi-root adapter must support adding workspace roots\n"
             f"EXPECTED: True\n"
             f"ACTUAL: {result}\n"
-            f"GUIDANCE: Send workspace/didChangeWorkspaceFolders notification"
+            f"GUIDANCE: Return True after sending notification"
+        )
+
+        # POST-3 assertion: LSP notification was sent
+        mock_language_server.server.notify.did_change_workspace_folders.assert_called_once()
+        call_args = mock_language_server.server.notify.did_change_workspace_folders.call_args[0][0]
+        assert len(call_args["event"]["added"]) == 1, (
+            f"POST-3 violation: workspace/didChangeWorkspaceFolders not sent correctly\n"
+            f"WHY: LSP must be notified of new workspace folder\n"
+            f"EXPECTED: event.added contains 1 WorkspaceFolder\n"
+            f"ACTUAL: event.added contains {len(call_args['event']['added'])} items\n"
+            f"GUIDANCE: Send notification with added=[WorkspaceFolder(uri, name)]"
+        )
+        assert call_args["event"]["added"][0]["uri"] == root.as_uri(), (
+            f"POST-3 violation: Wrong URI in notification\n"
+            f"WHY: Notification must contain the correct root URI\n"
+            f"EXPECTED: {root.as_uri()}\n"
+            f"ACTUAL: {call_args['event']['added'][0]['uri']}\n"
+            f"GUIDANCE: Use root.as_uri() to convert Path to URI"
+        )
+
+        # POST-3 assertion: Root added to tracking
+        assert root in mock_language_server.workspace_roots, (
+            f"POST-3 violation: Root not added to workspace_roots tracking\n"
+            f"WHY: LSP instance must track which roots it serves\n"
+            f"EXPECTED: {root} in workspace_roots\n"
+            f"ACTUAL: workspace_roots = {mock_language_server.workspace_roots}\n"
+            f"GUIDANCE: Append root to ls.workspace_roots after notification"
         )
 
     def test_single_root_add_workspace_root_fails(
@@ -450,20 +490,50 @@ class TestRemoveWorkspaceRoot:
         self, rust_adapter, mock_language_server
     ):
         """
+        Enforces: POST-3 (On success, LSP no longer serves paths under root)
+
         WHY: Multi-root LSP should successfully remove workspace roots.
-        EXPECTED: remove_workspace_root returns True for multi-root adapter.
+        EXPECTED: remove_workspace_root returns True AND sends LSP notification.
         """
-        mock_language_server.workspace_roots = [Path("/project-a")]
         root = Path("/project-a")
+        mock_language_server.workspace_roots = [root]
 
         result = rust_adapter.remove_workspace_root(mock_language_server, root)
 
+        # POST-3 assertion: Returns True on success
         assert result is True, (
-            f"FAILED: remove_workspace_root for multi-root LSP\n"
+            f"POST-3 violation: remove_workspace_root did not return True\n"
             f"WHY: Multi-root adapter must support removing workspace roots\n"
             f"EXPECTED: True\n"
             f"ACTUAL: {result}\n"
-            f"GUIDANCE: Send workspace/didChangeWorkspaceFolders with removed folders"
+            f"GUIDANCE: Return True after sending notification"
+        )
+
+        # POST-3 assertion: LSP notification was sent
+        mock_language_server.server.notify.did_change_workspace_folders.assert_called_once()
+        call_args = mock_language_server.server.notify.did_change_workspace_folders.call_args[0][0]
+        assert len(call_args["event"]["removed"]) == 1, (
+            f"POST-3 violation: workspace/didChangeWorkspaceFolders not sent correctly\n"
+            f"WHY: LSP must be notified of removed workspace folder\n"
+            f"EXPECTED: event.removed contains 1 WorkspaceFolder\n"
+            f"ACTUAL: event.removed contains {len(call_args['event']['removed'])} items\n"
+            f"GUIDANCE: Send notification with removed=[WorkspaceFolder(uri, name)]"
+        )
+        assert call_args["event"]["removed"][0]["uri"] == root.as_uri(), (
+            f"POST-3 violation: Wrong URI in notification\n"
+            f"WHY: Notification must contain the correct root URI\n"
+            f"EXPECTED: {root.as_uri()}\n"
+            f"ACTUAL: {call_args['event']['removed'][0]['uri']}\n"
+            f"GUIDANCE: Use root.as_uri() to convert Path to URI"
+        )
+
+        # POST-3 assertion: Root removed from tracking
+        assert root not in mock_language_server.workspace_roots, (
+            f"POST-3 violation: Root not removed from workspace_roots tracking\n"
+            f"WHY: LSP instance must update its tracking after removal\n"
+            f"EXPECTED: {root} not in workspace_roots\n"
+            f"ACTUAL: workspace_roots = {mock_language_server.workspace_roots}\n"
+            f"GUIDANCE: Remove root from ls.workspace_roots after notification"
         )
 
     def test_single_root_remove_workspace_root_fails(

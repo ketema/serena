@@ -392,6 +392,7 @@ class GlobalLanguageServerPool:
         Loads ProjectConfig from workspace_root if available, otherwise uses defaults.
         REQ-7: Factory MUST respect user's project.yml settings.
         REQ-ERR-1: Configuration errors are logged, not silently swallowed.
+        POST-3: LSP created with initial workspace_root in workspace_roots list.
         """
         # Import here to avoid circular dependency
         from serena.config.serena_config import ProjectConfig
@@ -446,6 +447,12 @@ class GlobalLanguageServerPool:
             repository_root_path=str(workspace_root),
         )
         lsp.start()
+        
+        # POST-3: Initialize workspace_roots with the initial workspace
+        # This is required for multi-root LSPs to track which workspaces they serve
+        lsp.workspace_roots = [workspace_root]
+        logger.debug(f"Initialized LSP workspace_roots with: {workspace_root}")
+        
         return lsp
 
     def _on_idle_timeout(self, language_str: str) -> None:

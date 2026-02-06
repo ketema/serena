@@ -29,11 +29,14 @@ INVARIANTS:
 - INV-3: All LSP communication is synchronous
 """
 
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from solidlsp.ls_config import Language
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from solidlsp import SolidLanguageServer
@@ -224,11 +227,47 @@ class BaseMultiRootAdapter(LSPCapabilityAdapterContract):
 
         PRE: ls is running SolidLanguageServer instance
         PRE: root is absolute path to project root
-        POST: Returns True on success
+        POST-3: Returns True on success
+        POST-3: On success, LSP now serves paths under root
+        BEHAVIOR: Send workspace/didChangeWorkspaceFolders notification
         """
-        # For now, return True to indicate success
-        # Full implementation will send LSP notification
-        return True
+        from solidlsp.lsp_protocol_handler import lsp_types
+        
+        # Check if already registered
+        workspace_roots: list[Path] = getattr(ls, "workspace_roots", [])
+        if root in workspace_roots:
+            log.debug(f"Root {root} already registered in workspace_roots")
+            return True
+        
+        # Create WorkspaceFolder for the new root
+        root_uri = root.as_uri()
+        workspace_folder: lsp_types.WorkspaceFolder = {
+            "uri": root_uri,
+            "name": root.name,
+        }
+        
+        # Create notification params
+        params: lsp_types.DidChangeWorkspaceFoldersParams = {
+            "event": {
+                "added": [workspace_folder],
+                "removed": [],
+            }
+        }
+        
+        # Send notification to LSP
+        try:
+            ls.server.notify.did_change_workspace_folders(params)
+            log.info(f"Sent workspace/didChangeWorkspaceFolders notification: added {root}")
+            
+            # Update local tracking
+            if not hasattr(ls, "workspace_roots"):
+                ls.workspace_roots = []
+            ls.workspace_roots.append(root)
+            
+            return True
+        except Exception as e:
+            log.error(f"Failed to add workspace root {root}: {e}")
+            return False
 
     def remove_workspace_root(
         self,
@@ -240,11 +279,45 @@ class BaseMultiRootAdapter(LSPCapabilityAdapterContract):
 
         PRE: ls is running SolidLanguageServer instance
         PRE: root is absolute path previously added
-        POST: Returns True on success
+        POST-3: Returns True on success
+        POST-3: On success, LSP no longer serves paths under root
+        BEHAVIOR: Send workspace/didChangeWorkspaceFolders notification
         """
-        # For now, return True to indicate success
-        # Full implementation will send LSP notification
-        return True
+        from solidlsp.lsp_protocol_handler import lsp_types
+        
+        # Check if registered
+        workspace_roots: list[Path] = getattr(ls, "workspace_roots", [])
+        if root not in workspace_roots:
+            log.debug(f"Root {root} not in workspace_roots, nothing to remove")
+            return True  # Idempotent - already removed
+        
+        # Create WorkspaceFolder for the root to remove
+        root_uri = root.as_uri()
+        workspace_folder: lsp_types.WorkspaceFolder = {
+            "uri": root_uri,
+            "name": root.name,
+        }
+        
+        # Create notification params
+        params: lsp_types.DidChangeWorkspaceFoldersParams = {
+            "event": {
+                "added": [],
+                "removed": [workspace_folder],
+            }
+        }
+        
+        # Send notification to LSP
+        try:
+            ls.server.notify.did_change_workspace_folders(params)
+            log.info(f"Sent workspace/didChangeWorkspaceFolders notification: removed {root}")
+            
+            # Update local tracking
+            ls.workspace_roots.remove(root)
+            
+            return True
+        except Exception as e:
+            log.error(f"Failed to remove workspace root {root}: {e}")
+            return False
 
     def get_workspace_roots(
         self,
