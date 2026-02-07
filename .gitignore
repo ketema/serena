@@ -264,3 +264,4 @@ error_log_*.txt
 
 # Ralph loop transient files
 .claude/ralph-loop*.md
+CLAUDE.md

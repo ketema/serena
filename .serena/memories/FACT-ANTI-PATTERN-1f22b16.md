@@ -2,8 +2,8 @@
 
 **Category**: ANTI-PATTERN
 **Fact ID**: FACT-ANTI-PATTERN-1f22b16
-**Created**: 2026-01-12T16:26:56Z
-**Source Session**: 4fb5e8c8-5c2f-45e7-86e9-d08aea9bcdcb
+**Created**: 2026-02-07T05:48:26Z
+**Source Session**: b0a47d84-d5e0-448a-8b71-98d195cb6740
 
 ## Fact Statement
 
