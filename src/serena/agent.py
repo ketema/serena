@@ -22,6 +22,7 @@ from serena.config.context_mode import SerenaAgentContext, SerenaAgentMode
 from serena.config.serena_config import LanguageBackend, SerenaConfig, ToolInclusionDefinition
 from serena.dashboard import SerenaDashboardAPI
 from serena.global_lsp_pool import GlobalLanguageServerPool
+from serena.mcp_transport_context import get_transport_session_id
 from serena.project import Project
 from serena.prompt_factory import SerenaPromptFactory
 from serena.session_context import get_current_session, set_current_session
@@ -32,6 +33,15 @@ from serena.util.gui import system_has_usable_display
 from serena.util.inspection import iter_subclasses
 from serena.util.logging import MemoryLogHandler
 from solidlsp.ls_config import Language
+
+# Import PoolIntegrityError for CL12 contract enforcement
+try:
+    from contracts.lsp_lifecycle_authority_contract import PoolIntegrityError
+except ImportError:
+    # Graceful degradation if contracts module unavailable
+    class PoolIntegrityError(Exception):  # type: ignore
+        """Pool replacement violates integrity invariants."""
+        pass
 
 if TYPE_CHECKING:
     from serena.gui_log_viewer import GuiLogViewer
@@ -772,7 +782,37 @@ class SerenaAgent:
     def reset_language_server(self) -> None:
         """
         Reset language server resources by reinitializing the global pool.
+
+        GUARDS (CL12 PoolIntegrityContract):
+        - INV-PI-01: Pool NEVER replaced while sessions active
+        - POST-PI-01: HTTP mode + active sessions → PoolIntegrityError
+        - ERRORS-PI-02: STDIO mode proceeds with deprecation warning
         """
+        # Detect HTTP mode
+        session_id = get_transport_session_id()
+        is_http_mode = session_id is not None
+
+        # Get active session count
+        # INV-PI-01: Check SessionRegistry.get_session_overview()['total_count']
+        session_overview = self._session_registry.get_session_overview()
+        active_session_count = session_overview["total_count"]
+
+        # POST-PI-01, ERRORS-PI-01: HTTP mode + active sessions → raise PoolIntegrityError
+        if is_http_mode and active_session_count > 0:
+            raise PoolIntegrityError(
+                f"Cannot replace LSP pool: {active_session_count} active sessions in HTTP mode. "
+                "Pool replacement would destroy active client sessions."
+            )
+
+        # ERRORS-PI-02: STDIO mode proceeds with deprecation warning
+        if not is_http_mode:
+            log.warning(
+                "reset_language_server() called in STDIO mode. "
+                "This is deprecated. Pool replacement in STDIO mode may break active sessions. "
+                "Migrate to HTTP mode with server-managed LSP lifecycle."
+            )
+
+        # POST-PI-02: No active sessions → replacement proceeds
         self._lsp_pool = GlobalLanguageServerPool()
 
     def reset_language_server_manager(self) -> None:

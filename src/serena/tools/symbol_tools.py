@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from copy import copy
 from typing import Any
 
+from serena.mcp_transport_context import get_transport_session_id
 from serena.tools import SUCCESS_RESULT, Tool, ToolMarkerSymbolicEdit, ToolMarkerSymbolicRead
 from serena.tools.tools_base import ToolMarkerOptional
 from solidlsp.ls_types import SymbolKind
@@ -37,8 +38,18 @@ class RestartLanguageServerTool(Tool, ToolMarkerOptional):
         """Use this tool only on explicit user request or after confirmation.
         It may be necessary to restart the language server if it hangs.
         """
+        # INV-RTG-01: HTTP mode MUST NOT call reset_language_server()
+        # POST-RTG-01: HTTP mode returns error message
+        session_id = get_transport_session_id()
+        is_http_mode = session_id is not None
+
+        if is_http_mode:
+            # ERRORS-RTG-01: Return error string (does not raise)
+            return "RestartLanguageServerTool is disabled in HTTP mode. LSP lifecycle is server-managed in multi-client environments."
+
+        # POST-RTG-03: STDIO mode preserves existing behavior
         self.agent.reset_language_server()
-        return SUCCESS_RESULT
+        return "Language server successfully restarted"
 
 
 class GetSymbolsOverviewTool(Tool, ToolMarkerSymbolicRead):
