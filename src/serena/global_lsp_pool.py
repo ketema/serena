@@ -160,6 +160,10 @@ class GlobalLanguageServerPool:
                 # Touch timeout manager (mark as recently used)
                 self.timeout_manager.touch(str(language))
 
+                # SEQ-TMO-INIT-01: Start monitoring after successful acquisition
+                # Called on every acquire() — start_monitoring() is internally idempotent
+                self.timeout_manager.start_monitoring()
+
                 # For multi-root, check if we need to add workspace
                 # SEQ-POOL-06: After add_workspace_root, probe readiness
                 if is_multi_root and not adapter.can_serve_path(lsp, workspace_root):
@@ -199,6 +203,10 @@ class GlobalLanguageServerPool:
 
             # Touch timeout manager (mark as recently used)
             self.timeout_manager.touch(str(language))
+
+            # SEQ-TMO-INIT-01: Start monitoring after successful acquisition
+            # Called on every acquire() — start_monitoring() is internally idempotent
+            self.timeout_manager.start_monitoring()
 
             # LOG-POOL-01: Successful acquisition (new mode)
             logger.info(
