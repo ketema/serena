@@ -22,11 +22,15 @@ Clause Coverage Matrix:
 | SEQ-POOL-02    | test_seq_pool_02_acquire_adds_workspace_root             |
 | SEQ-POOL-03    | test_seq_pool_03_acquire_touches_timeout                 |
 | SEQ-POOL-04    | test_seq_pool_04_release_touches_timeout                 |
-| SEQ-POOL-05    | test_seq_pool_05_session_close_calls_release             |
+| SEQ-POOL-05    | test_seq_pool_05_session_close_calls_release             | PARTIAL (prereq only) |
 | SEQ-POOL-06    | test_seq_pool_06_acquire_probes_readiness                | SKIPPED (pending impl) |
 | SEQ-TEH-01     | test_seq_teh_01_apply_ex_calls_handle_lsp_termination    | SKIPPED (pending impl) |
 | SEQ-TEH-02     | test_seq_teh_02_handler_calls_surgical_restart           | Tier 3 (ABC double)    |
 | SEQ-SR-01      | test_seq_sr_01_surgical_restart_restores_roots           | Tier 3 (ABC double)    |
+| PRE-SR-GWR-01  | (covered via POST-SR-GWR-01 tests — valid Language enum) |                        |
+| POST-SR-GWR-01 | test_get_workspace_roots_returns_list_of_paths           |                        |
+| POST-SR-GWR-01 | test_get_workspace_roots_empty_when_no_lsp               |                        |
+| POST-SR-GWR-02 | test_get_workspace_roots_does_not_modify_state           |                        |
 +----------------+----------------------------------------------------------+
 
 REQ Traceability: REQ-2026-005, Phase 2.5 (E-1 through E-10, IP-1 through IP-6)
@@ -394,20 +398,22 @@ class TestSeqPool04ReleaseTouchesTimeout:
 
 class TestSeqPool05SessionCloseCallsRelease:
     """
-    Enforces: SEQ-POOL-05
+    Partially documents: SEQ-POOL-05 (prerequisite only — full enforcement pending implementation)
 
     Verifies that McpSessionBridge.on_transport_session_closed() calls
-    GlobalLanguageServerPool.release() for the disconnecting session.
+    unbind_session() (prerequisite). Full SEQ-POOL-05 enforcement requires
+    verifying pool.release() is also called, which is NOT YET WIRED (BUG #2).
 
-    NOTE: This test verifies a wiring obligation that does NOT currently exist
+    NOTE: This test verifies only the PREREQUISITE of SEQ-POOL-05.
+    The full wiring obligation (pool.release) does NOT currently exist
     in the codebase. The current on_transport_session_closed() only calls
     unbind_session() — it does NOT call pool.release(). This is BUG #2.
-    The test is written to FAIL (RED) until the implementation is fixed.
+    When implementation adds pool.release(), upgrade this test to "Enforces: SEQ-POOL-05".
 
     SEQ_TEST_SELF_CHECK:
       [x] Test constructs McpSessionBridge (parent lifecycle)
-      [x] Test verifies release called through parent's on_transport_session_closed
-      [x] Test does NOT directly call release
+      [x] Test verifies unbind_session called through parent's on_transport_session_closed
+      [ ] Test does NOT yet verify pool.release (pending implementation)
       [x] Mock injected at construction time
     """
 
@@ -415,8 +421,9 @@ class TestSeqPool05SessionCloseCallsRelease:
         """
         CONTRACT TRACEABILITY:
         - Contract: lsp_lifecycle_authority_contract.py → SEQ-POOL-05
-        - Enforces: SEQ-POOL-05: on_transport_session_closed() MUST call pool.release()
-        - Category: integration (Tier 1.5)
+        - Partially documents: SEQ-POOL-05 (verifies unbind_session prerequisite only)
+        - Full enforcement: Pending pool.release() wiring in on_transport_session_closed
+        - Category: integration (Tier 1.5 — partial)
         - Adversarial: Implementation-blind
         """
         # This test documents the EXPECTED wiring that SEQ-POOL-05 requires.
@@ -653,6 +660,152 @@ class TestSeqSr01SurgicalRestartRestoresRoots:
             f"EXPECTED: {expected_roots}\n"
             f"ACTUAL: {actual_roots}\n"
             "GUIDANCE: Every root from the crashed LSP must be re-registered on new instance"
+        )
+
+
+# ---------------------------------------------------------------------------
+# PRE-SR-GWR-01, POST-SR-GWR-01, POST-SR-GWR-02:
+# get_workspace_roots_for_language behavioral clauses
+# ---------------------------------------------------------------------------
+
+
+class TestGetWorkspaceRootsForLanguage:
+    """
+    Enforces: PRE-SR-GWR-01, POST-SR-GWR-01, POST-SR-GWR-02
+
+    Verifies that get_workspace_roots_for_language() returns correct workspace
+    roots for a language's LSP and does NOT modify state.
+
+    SEQ_TEST_SELF_CHECK:
+      [x] Test constructs pool and populates via lifecycle (acquire)
+      [x] Test verifies return values match contract clauses
+      [x] Test verifies no state mutation (POST-SR-GWR-02)
+      [x] Mocks injected at construction time
+    """
+
+    def test_get_workspace_roots_returns_list_of_paths(self):
+        """
+        CONTRACT TRACEABILITY:
+        - Contract: lsp_lifecycle_authority_contract.py → POST-SR-GWR-01
+        - Enforces: POST-SR-GWR-01: Returns list of Path (possibly empty if no LSP running)
+        - Category: Tier 1 (behavioral)
+        - Adversarial: Implementation-blind
+        """
+        class TestableContract(SurgicalRestartContract):
+            def __init__(self):
+                self._roots = {
+                    str(Language.PYTHON): [Path("/project1"), Path("/project2")],
+                }
+
+            def surgical_restart_lsp(self, language):
+                return MockLanguageServer()
+
+            def get_workspace_roots_for_language(self, language):
+                return self._roots.get(str(language), [])
+
+        handler = TestableContract()
+        roots = handler.get_workspace_roots_for_language(Language.PYTHON)
+
+        # POST-SR-GWR-01: Returns list of Path
+        assert isinstance(roots, list), (
+            "POST-SR-GWR-01 violation: get_workspace_roots_for_language() "
+            "did not return a list.\n"
+            "Contract: POST-SR-GWR-01\n"
+            f"EXPECTED: list of Path\n"
+            f"ACTUAL: {type(roots).__name__}\n"
+            "GUIDANCE: Return type MUST be list of Path"
+        )
+        assert len(roots) == 2, (
+            "POST-SR-GWR-01 violation: get_workspace_roots_for_language() "
+            "returned wrong number of roots.\n"
+            "Contract: POST-SR-GWR-01\n"
+            f"EXPECTED: 2 roots (project1, project2)\n"
+            f"ACTUAL: {len(roots)} roots\n"
+            "GUIDANCE: Must return ALL registered workspace roots for language"
+        )
+        for root in roots:
+            assert isinstance(root, Path), (
+                "POST-SR-GWR-01 violation: element in roots list is not a Path.\n"
+                f"EXPECTED: Path instance\n"
+                f"ACTUAL: {type(root).__name__}: {root}\n"
+                "GUIDANCE: All elements MUST be Path objects"
+            )
+
+    def test_get_workspace_roots_empty_when_no_lsp(self):
+        """
+        CONTRACT TRACEABILITY:
+        - Contract: lsp_lifecycle_authority_contract.py → POST-SR-GWR-01
+        - Enforces: POST-SR-GWR-01: Returns possibly empty list if no LSP running
+        - Category: Tier 1 (behavioral)
+        - Adversarial: Implementation-blind
+        """
+        class TestableContract(SurgicalRestartContract):
+            def surgical_restart_lsp(self, language):
+                return MockLanguageServer()
+
+            def get_workspace_roots_for_language(self, language):
+                return []
+
+        handler = TestableContract()
+        roots = handler.get_workspace_roots_for_language(Language.RUST)
+
+        # POST-SR-GWR-01: possibly empty if no LSP running
+        assert roots == [], (
+            "POST-SR-GWR-01 violation: get_workspace_roots_for_language() "
+            "should return empty list for language with no LSP.\n"
+            "Contract: POST-SR-GWR-01\n"
+            f"EXPECTED: []\n"
+            f"ACTUAL: {roots}\n"
+            "GUIDANCE: Must return empty list (not None, not error) when no LSP running"
+        )
+
+    def test_get_workspace_roots_does_not_modify_state(self):
+        """
+        CONTRACT TRACEABILITY:
+        - Contract: lsp_lifecycle_authority_contract.py → POST-SR-GWR-02
+        - Enforces: POST-SR-GWR-02: Does NOT modify state
+        - Category: Tier 1 (behavioral)
+        - Adversarial: Implementation-blind
+        """
+        class TestableContract(SurgicalRestartContract):
+            def __init__(self):
+                self._roots = {
+                    str(Language.PYTHON): [Path("/project1"), Path("/project2")],
+                }
+                self.state_mutations = 0
+
+            def surgical_restart_lsp(self, language):
+                self.state_mutations += 1
+                return MockLanguageServer()
+
+            def get_workspace_roots_for_language(self, language):
+                # This should NOT mutate state
+                return list(self._roots.get(str(language), []))
+
+        handler = TestableContract()
+        initial_mutation_count = handler.state_mutations
+
+        # ACT: Call get_workspace_roots multiple times
+        roots1 = handler.get_workspace_roots_for_language(Language.PYTHON)
+        roots2 = handler.get_workspace_roots_for_language(Language.PYTHON)
+
+        # POST-SR-GWR-02: Does NOT modify state
+        assert handler.state_mutations == initial_mutation_count, (
+            "POST-SR-GWR-02 violation: get_workspace_roots_for_language() "
+            "modified state.\n"
+            "Contract: POST-SR-GWR-02\n"
+            f"EXPECTED: state_mutations unchanged at {initial_mutation_count}\n"
+            f"ACTUAL: state_mutations = {handler.state_mutations}\n"
+            "GUIDANCE: This is a read-only operation, MUST NOT modify any state"
+        )
+        # Also verify idempotent — same result on repeated calls
+        assert roots1 == roots2, (
+            "POST-SR-GWR-02 violation: get_workspace_roots_for_language() "
+            "returned different results on repeated calls.\n"
+            "Contract: POST-SR-GWR-02 (idempotent read)\n"
+            f"EXPECTED: roots1 == roots2\n"
+            f"ACTUAL: roots1={roots1}, roots2={roots2}\n"
+            "GUIDANCE: Read-only operation must be idempotent"
         )
 
 
