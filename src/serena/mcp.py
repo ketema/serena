@@ -497,6 +497,7 @@ class SerenaMCPFactory:
                 # SEQ-POOL-05-FACTORY: Wire lsp_pool into bridge for cleanup chain
                 # Factory uses RLock (reentrant), so nested get_lsp_pool() call is safe
                 lsp_pool = self.get_lsp_pool()
+                assert lsp_pool is not None, "Factory.get_lsp_pool() returned None"
                 self._session_bridge = MCPSessionBridge(session_registry, lsp_pool=lsp_pool)
             return self._session_bridge
 
