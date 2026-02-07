@@ -205,6 +205,12 @@ class SerenaAgent:
         :param session_bridge: Optional MCPSessionBridge for MCP protocol session bridging.
         :param lsp_pool: Optional GlobalLanguageServerPool for shared language server management.
         """
+        # INV-SHUT-01, INV-SHUT-04: Shutdown idempotency via threading.Lock + flag
+        # MUST be set BEFORE any code that can fail (e.g. SerenaConfig.from_config_file()),
+        # because __del__ calls shutdown() which requires _shutdown_lock.
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_called = False
+
         # obtain serena configuration using the decoupled factory function
         self.serena_config = serena_config or SerenaConfig.from_config_file()
 
@@ -212,10 +218,6 @@ class SerenaAgent:
         self._session_registry = session_registry if session_registry is not None else SessionRegistry()
         self._session_bridge = session_bridge
         self._lsp_pool = lsp_pool
-
-        # INV-SHUT-01, INV-SHUT-04: Shutdown idempotency via threading.Lock + flag
-        self._shutdown_lock = threading.Lock()
-        self._shutdown_called = False
 
         # adjust log level
         serena_log_level = self.serena_config.log_level
@@ -946,6 +948,9 @@ class SerenaAgent:
         INV-SHUT-01, INV-SHUT-04: Idempotent via threading.Lock + flag.
         Safe to call from signal handler and atexit.
         """
+        # Guard against partially constructed instances (e.g. object.__new__ in tests)
+        if not hasattr(self, "_shutdown_lock"):
+            return
         # INV-SHUT-01: Idempotency check
         with self._shutdown_lock:
             if self._shutdown_called:
