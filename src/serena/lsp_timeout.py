@@ -80,11 +80,16 @@ class LSPTimeoutManager:
         Idempotent - safe to call multiple times.
         """
         if self._monitoring_thread is not None and self._monitoring_thread.is_alive():
+            # LOG-TMO-01 (POST-NOOP): Already monitoring
+            logger.debug("[LSP-Timeout] Monitoring already active, skipping start")
             return  # Already monitoring
 
         self._stop_event.clear()
         self._monitoring_thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._monitoring_thread.start()
+
+        # LOG-TMO-01: Monitoring started
+        logger.info(f"[LSP-Timeout] Monitoring started (interval: {self._check_interval}s)")
 
     def stop_monitoring(self) -> None:
         """
@@ -96,6 +101,12 @@ class LSPTimeoutManager:
         if self._monitoring_thread is not None and self._monitoring_thread.is_alive():
             self._stop_event.set()
             self._monitoring_thread.join(timeout=5.0)
+
+            # LOG-TMO-02: Monitoring stopped
+            logger.info("[LSP-Timeout] Monitoring stopped")
+        else:
+            # LOG-TMO-02 (POST-NOOP): Not monitoring
+            logger.debug("[LSP-Timeout] Monitoring not active, skipping stop")
 
     def is_monitoring(self) -> bool:
         """
@@ -120,9 +131,17 @@ class LSPTimeoutManager:
             timeout = self.get_timeout(language)
 
             if idle_time > timeout:
+                # LOG-TMO-03: Per-language reclamation
+                logger.info(f"[LSP-Timeout] Reclaiming idle {language} LSP (idle: {idle_time:.0f}s, timeout: {timeout}s)")
+
                 reclaimed.append(language)
                 if self._reclaim_callback is not None:
                     self._reclaim_callback(language)
+
+        # LOG-TMO-03 (POST-SUMMARY): Summary if any reclaimed
+        if reclaimed:
+            languages_str = ", ".join(reclaimed)
+            logger.info(f"[LSP-Timeout] Reclaimed {len(reclaimed)} idle LSP(s): {languages_str}")
 
         return reclaimed
 

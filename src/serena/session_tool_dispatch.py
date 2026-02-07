@@ -7,11 +7,14 @@ Integrates SessionRegistry, PathValidation, and GlobalLanguageServerPool.
 Contract: contracts/session_tool_dispatch_contract.py
 """
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from serena.global_lsp_pool import GlobalLanguageServerPool
 from serena.path_validation import PathBoundaryError, validate_path
@@ -454,6 +457,10 @@ class SessionAwareToolDispatch:
         # Step 2: Determine tool category
         category = determine_tool_category(tool_name)
 
+        # LOG-DISP-01: Log tool dispatch with session and category
+        short_id = session_id[:8]
+        logger.debug(f"[Session: {short_id}] Dispatching tool '{tool_name}' (category: {category.value})")
+
         # Step 3: Validate preconditions for category
         if category in (ToolCategory.PROJECT, ToolCategory.LSP):
             if not ctx.has_active_project():
@@ -599,7 +606,13 @@ class SessionAwareToolDispatch:
             raise NoProjectActivatedError(session_id, "validate_path")
 
         # Delegate to path validator
-        return self._path_validator(path, workspace_root)
+        resolved_path = self._path_validator(path, workspace_root)
+
+        # LOG-DISP-02: Log successful path validation
+        short_id = session_id[:8]
+        logger.debug(f"[Session: {short_id}] Path validated: {resolved_path}")
+
+        return resolved_path
 
     def get_lsp_for_session(
         self,

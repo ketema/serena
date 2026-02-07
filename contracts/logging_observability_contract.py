@@ -268,3 +268,144 @@ WHEN: After LSP references cleared, before unbind_session call
 
 NOTE: count = number of languages in lsp_references that were released.
 """
+
+
+# =============================================================================
+# TIER 5: Tool Dispatch — MEDIUM
+# File: src/serena/session_tool_dispatch.py
+# Session context: AVAILABLE (session_id is method parameter)
+# Logger: NEEDS `logger = logging.getLogger(__name__)` (NEW)
+# =============================================================================
+
+LOG_DISP_01 = """
+LOG-DISP-01: SessionAwareToolDispatch.dispatch_tool() — Tool Dispatched
+
+POST: MUST emit DEBUG log showing tool dispatch with session and category:
+FORMAT: "[Session: {short_id}] Dispatching tool '{tool_name}' (category: {category})"
+LEVEL: DEBUG
+WHEN: After category determined, before _execute_tool call
+
+NOTE: DEBUG level because tool dispatch is high-frequency. INFO would flood logs.
+"""
+
+LOG_DISP_02 = """
+LOG-DISP-02: SessionAwareToolDispatch.validate_path_for_session() — Path Validation Delegated
+
+POST-SUCCESS: MUST emit DEBUG log on successful validation:
+FORMAT: "[Session: {short_id}] Path validated: {resolved_path}"
+LEVEL: DEBUG
+WHEN: After validate_path() returns successfully
+
+POST-REJECT: PathBoundaryError raised by validate_path() is NOT caught here
+             (it propagates to caller). No additional logging needed — LOG-SEC-01 covers it.
+
+NOTE: DEBUG level. validate_path_for_session is a thin wrapper; the security
+      logging lives in validate_path() itself (LOG-SEC-01/02).
+"""
+
+
+# =============================================================================
+# TIER 6: Security Boundary — HIGH (LOG-3 Convention)
+# File: src/serena/path_validation.py
+# Session context: NOT AVAILABLE (no session_id parameter)
+# Logger: NEEDS `logger = logging.getLogger(__name__)` (NEW)
+# =============================================================================
+
+LOG_SEC_01 = """
+LOG-SEC-01: validate_path() — Path Boundary Violation
+
+POST: When PathBoundaryError is about to be raised (path escapes boundary),
+      MUST emit WARNING log:
+FORMAT: "[Security] Path boundary violation: '{relative_path}' resolves outside "
+        "project root '{project_root}'"
+LEVEL: WARNING
+WHEN: Before raising PathBoundaryError in the boundary check block
+
+NOTE: LOG-3 convention. This is a security boundary violation — an attempt
+      (possibly innocent) to access files outside the project. WARNING, not ERROR,
+      because it could be a misconfigured path rather than an attack.
+"""
+
+LOG_SEC_02 = """
+LOG-SEC-02: validate_path() — Path Resolution Failure
+
+POST: When path resolution fails (OSError/RuntimeError), MUST emit WARNING log:
+FORMAT: "[Security] Path resolution failed: '{relative_path}' — {error}"
+LEVEL: WARNING
+WHEN: Before raising PathBoundaryError in the resolution except block
+
+NOTE: Resolution failures (broken symlinks, permission errors) can indicate
+      symlink-based boundary escape attempts. LOG-3 convention.
+"""
+
+
+# =============================================================================
+# TIER 7: Infrastructure — MEDIUM
+# Files: src/serena/lsp_timeout.py, src/serena/tools/symbol_tools.py
+# Session context: NOT AVAILABLE in timeout manager; NOT AVAILABLE in RestartTool
+# Logger: lsp_timeout.py NEEDS `logger = logging.getLogger(__name__)` (NEW)
+#         symbol_tools.py uses `log = logging.getLogger(__name__)` (existing)
+# =============================================================================
+
+LOG_TMO_01 = """
+LOG-TMO-01: LSPTimeoutManager.start_monitoring() — Monitor Started
+
+POST: When monitoring thread actually starts (not already running), MUST emit INFO log:
+FORMAT: "[LSP-Timeout] Monitoring started (interval: {interval}s)"
+LEVEL: INFO
+WHEN: After thread.start()
+
+POST-NOOP: When already monitoring (early return), MUST emit DEBUG log:
+FORMAT: "[LSP-Timeout] Monitoring already active, skipping start"
+LEVEL: DEBUG
+"""
+
+LOG_TMO_02 = """
+LOG-TMO-02: LSPTimeoutManager.stop_monitoring() — Monitor Stopped
+
+POST: When monitoring thread is stopped, MUST emit INFO log:
+FORMAT: "[LSP-Timeout] Monitoring stopped"
+LEVEL: INFO
+WHEN: After thread.join() completes
+
+POST-NOOP: When not monitoring (thread is None or not alive), MUST emit DEBUG log:
+FORMAT: "[LSP-Timeout] Monitoring not active, skipping stop"
+LEVEL: DEBUG
+"""
+
+LOG_TMO_03 = """
+LOG-TMO-03: LSPTimeoutManager.check_and_reclaim() — Idle Reclamation
+
+POST: For each reclaimed language, MUST emit INFO log:
+FORMAT: "[LSP-Timeout] Reclaiming idle {language} LSP (idle: {idle_time:.0f}s, timeout: {timeout}s)"
+LEVEL: INFO
+WHEN: Before calling reclaim_callback for each language
+
+POST-SUMMARY: After check loop, if any reclaimed, MUST emit INFO summary:
+FORMAT: "[LSP-Timeout] Reclaimed {count} idle LSP(s): {languages}"
+LEVEL: INFO
+WHEN: Before returning reclaimed list
+
+NOTE: Individual per-language logs enable tracing; summary enables dashboarding.
+"""
+
+LOG_RST_01 = """
+LOG-RST-01: RestartLanguageServerTool.apply() — HTTP Mode Guard
+
+POST: When HTTP mode detected (session_id is not None), MUST emit INFO log:
+FORMAT: "[Tool] RestartLanguageServerTool: blocked in HTTP mode (session: {short_id})"
+LEVEL: INFO
+WHEN: Before returning the error message
+
+NOTE: This is an operational event — someone attempted a restart in HTTP mode.
+      INFO, not WARNING, because the guard working correctly is expected behavior.
+"""
+
+LOG_RST_02 = """
+LOG-RST-02: RestartLanguageServerTool.apply() — STDIO Restart
+
+POST: When STDIO mode restart is performed, MUST emit INFO log:
+FORMAT: "[Tool] RestartLanguageServerTool: restarting LSP (STDIO mode)"
+LEVEL: INFO
+WHEN: Before calling reset_language_server()
+"""

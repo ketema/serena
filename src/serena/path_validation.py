@@ -7,7 +7,10 @@ Critical security component - all paths must be validated before file operations
 Contract: contracts/path_validation_contract.py
 """
 
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class PathBoundaryError(Exception):
@@ -91,6 +94,10 @@ def validate_path(relative_path: str | Path, project_root: Path) -> Path:
         # OSError: filesystem issues (permissions, broken symlinks, etc.)
         # RuntimeError: raised on some platforms for symlink loops exceeding depth limit
         # Handle cases where resolution fails (broken symlinks, etc.)
+
+        # LOG-SEC-02: Log path resolution failure before raising
+        logger.warning(f"[Security] Path resolution failed: '{relative_path}' — {e}")
+
         raise PathBoundaryError(
             resolved_path=combined_path,
             project_root=resolved_project_root,
@@ -103,6 +110,13 @@ def validate_path(relative_path: str | Path, project_root: Path) -> Path:
         resolved_path.relative_to(resolved_project_root)
     except ValueError:
         # Path escapes the boundary
+
+        # LOG-SEC-01: Log boundary violation before raising
+        logger.warning(
+            f"[Security] Path boundary violation: '{relative_path}' resolves outside "
+            f"project root '{resolved_project_root}'"
+        )
+
         # POST-3, POST-4: Raise with helpful message and attributes
         raise PathBoundaryError(
             resolved_path=resolved_path,

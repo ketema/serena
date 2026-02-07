@@ -3,6 +3,7 @@ Language server-related tools
 """
 
 import json
+import logging
 import os
 from collections import defaultdict
 from collections.abc import Sequence
@@ -13,6 +14,8 @@ from serena.mcp_transport_context import get_transport_session_id
 from serena.tools import SUCCESS_RESULT, Tool, ToolMarkerSymbolicEdit, ToolMarkerSymbolicRead
 from serena.tools.tools_base import ToolMarkerOptional
 from solidlsp.ls_types import SymbolKind
+
+log = logging.getLogger(__name__)
 
 
 def _sanitize_symbol_dict(symbol_dict: dict[str, Any]) -> dict[str, Any]:
@@ -44,8 +47,15 @@ class RestartLanguageServerTool(Tool, ToolMarkerOptional):
         is_http_mode = session_id is not None
 
         if is_http_mode:
+            # LOG-RST-01: Log HTTP mode guard
+            short_id = session_id[:8] if session_id else "unknown"
+            log.info(f"[Tool] RestartLanguageServerTool: blocked in HTTP mode (session: {short_id})")
+
             # ERRORS-RTG-01: Return error string (does not raise)
             return "RestartLanguageServerTool is disabled in HTTP mode. LSP lifecycle is server-managed in multi-client environments."
+
+        # LOG-RST-02: Log STDIO restart
+        log.info("[Tool] RestartLanguageServerTool: restarting LSP (STDIO mode)")
 
         # POST-RTG-03: STDIO mode preserves existing behavior
         self.agent.reset_language_server()
