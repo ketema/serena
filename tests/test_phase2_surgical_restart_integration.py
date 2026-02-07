@@ -38,6 +38,13 @@ class TestSurgicalRestartIntegration(unittest.TestCase):
         self.mock_adapter_registry.get_pool_key = MagicMock()
         self.mock_adapter_registry.add_workspace_root = MagicMock()
 
+        # Mock adapter returned by get_adapter() - implementation calls
+        # adapter = self.capability_registry.get_adapter(language) then
+        # adapter.add_workspace_root(new_lsp, root), so we must wire the
+        # child mock that get_adapter() returns.
+        self.mock_adapter = MagicMock()
+        self.mock_adapter_registry.get_adapter.return_value = self.mock_adapter
+
         # Mock timeout manager
         self.mock_timeout_manager = MagicMock()
 
@@ -123,7 +130,7 @@ class TestSurgicalRestartIntegration(unittest.TestCase):
         # Mock add_workspace_root to actually append to workspace_roots
         def mock_add_root(lsp, root):
             lsp.workspace_roots.append(root)
-        self.mock_adapter_registry.add_workspace_root.side_effect = mock_add_root
+        self.mock_adapter.add_workspace_root.side_effect = mock_add_root
 
         with patch.object(self.pool, "_create_lsp", return_value=new_lsp):
             # ACT: Call surgical_restart_lsp
@@ -168,18 +175,18 @@ class TestSurgicalRestartIntegration(unittest.TestCase):
             result = self.pool.surgical_restart_lsp(language)
 
             # ASSERT: SEQ-SR-01 - add_workspace_root called EXACTLY 3 times
-            assert self.mock_adapter_registry.add_workspace_root.call_count == 3, (
+            assert self.mock_adapter.add_workspace_root.call_count == 3, (
                 f"SEQ-SR-01 violation: add_workspace_root not called correct number of times\n"
                 f"Contract: SurgicalRestartContract.surgical_restart_lsp() SEQ-SR-01\n"
                 f"EXPECTED: adapter.add_workspace_root() called 3 times (once per root)\n"
-                f"ACTUAL: called {self.mock_adapter_registry.add_workspace_root.call_count} times\n"
+                f"ACTUAL: called {self.mock_adapter.add_workspace_root.call_count} times\n"
                 f"GUIDANCE: Surgical restart MUST loop over ALL old workspace roots. "
                 f"Snapshot old_lsp.workspace_roots before stopping, then for each root "
                 f"in snapshot call adapter.add_workspace_root(new_lsp, root)."
             )
 
             # Verify all roots were passed
-            actual_roots = [call.args[1] for call in self.mock_adapter_registry.add_workspace_root.call_args_list]
+            actual_roots = [call.args[1] for call in self.mock_adapter.add_workspace_root.call_args_list]
             assert set(actual_roots) == set(old_roots), (
                 f"SEQ-SR-01 violation: Not all roots were restored\n"
                 f"Contract: SurgicalRestartContract.surgical_restart_lsp() SEQ-SR-01\n"
