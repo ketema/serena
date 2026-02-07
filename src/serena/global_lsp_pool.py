@@ -48,6 +48,17 @@ if TYPE_CHECKING:
 # Re-export for test patching
 LSPCapabilityRegistry = LSPAdapterRegistry
 
+
+# ERRORS-TEH-01: Exception raised when surgical restart fails
+class LSPRestartError(Exception):
+    """
+    Raised when surgical_restart_lsp() fails to restart an LSP instance.
+    
+    Contract: ToolExceptionHandlerContract ERRORS-TEH-01
+    Signals that handle_lsp_termination() should return error (not retry).
+    """
+    pass
+
 logger = logging.getLogger(__name__)
 
 

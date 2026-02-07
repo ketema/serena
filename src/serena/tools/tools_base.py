@@ -281,9 +281,23 @@ class Tool(Component):
                     result = apply_fn(**kwargs)
                 except SolidLSPException as e:
                     if e.is_language_server_terminated():
-                        log.error(f"Language server terminated while executing tool ({e}). Restarting the language server and retrying ...")
-                        self.agent.reset_language_server()
-                        result = apply_fn(**kwargs)
+                        # SEQ-TEH-01: Call handle_lsp_termination (surgical restart) instead of reset_language_server
+                        log.info(f"Language server terminated while executing tool ({e}). Performing surgical restart ...")
+
+                        # Extract language from exception.cause.language
+                        language = e.cause.language
+
+                        # Get workspace root from active project
+                        from pathlib import Path
+                        project = self.agent.get_active_project()
+                        workspace_root = Path(project.project_root)
+
+                        # Create retry callable
+                        def retry_fn():
+                            return apply_fn(**kwargs)
+
+                        # POST-TEH-03: handle_lsp_termination handles restart + retry, returns result or error
+                        result = self.agent.handle_lsp_termination(language, workspace_root, retry_fn)
                     else:
                         raise
 

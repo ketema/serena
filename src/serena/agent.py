@@ -815,6 +815,74 @@ class SerenaAgent:
         # POST-PI-02: No active sessions → replacement proceeds
         self._lsp_pool = GlobalLanguageServerPool()
 
+    def handle_lsp_termination(
+        self,
+        language: "Language",
+        workspace_root: Path,
+        retry_fn: Callable[[], str],
+    ) -> str:
+        """
+        Handle LanguageServerTerminatedException with surgical restart.
+
+        Contract: ToolExceptionHandlerContract (lsp_lifecycle_authority_contract.py lines 230-304)
+        
+        PRE-TEH-01: LSP for language has terminated
+        PRE-TEH-02: language and workspace_root identify the affected LSP
+        
+        POST-TEH-01: LSP surgically restarted (via surgical_restart_lsp)
+        POST-TEH-02: Workspace roots restored on restarted LSP
+        POST-TEH-03: retry_fn called on restarted LSP, result returned
+        POST-TEH-04: If retry fails, returns error string (no infinite retry)
+        POST-TEH-05: Other clients unaffected
+        
+        INV-TEH-01: Does NOT call reset_language_server() (pool-wide nuke)
+        INV-TEH-02: Does NOT replace self._lsp_pool
+        INV-TEH-03: Other languages' LSP instances unaffected
+        
+        ERRORS-TEH-01: Returns error string if restart fails
+        ERRORS-TEH-02: Returns error string if retry fails (max 1 retry)
+        
+        SEQ-TEH-02: Calls surgical_restart_lsp(language)
+        
+        :param language: Language of the terminated LSP
+        :param workspace_root: Workspace root for readiness probing
+        :param retry_fn: Callable that retries the original tool operation
+        :return: Result from retry_fn on success, or error string on failure
+        """
+        from serena.global_lsp_pool import LSPRestartError, probe_workspace_readiness
+        from solidlsp.ls_exceptions import SolidLSPException
+        
+        try:
+            # POST-TEH-01, SEQ-TEH-02: Surgical restart of terminated LSP
+            new_lsp = self._lsp_pool.surgical_restart_lsp(language)
+            
+            # POST-TEH-02: Wait for workspace readiness (workspace roots restored by surgical_restart_lsp)
+            timeout_seconds = 5.0
+            is_ready = probe_workspace_readiness(new_lsp, workspace_root, timeout_seconds)
+            
+            if not is_ready:
+                # ERRORS-TEH-01: Restart succeeded but LSP not ready
+                return f"Error: LSP restart succeeded but workspace not ready after {timeout_seconds}s"
+            
+            # POST-TEH-03: Retry the original tool operation on restarted LSP
+            try:
+                result = retry_fn()
+                return result
+            except SolidLSPException as e:
+                if e.is_language_server_terminated():
+                    # ERRORS-TEH-02: Retry also raised termination → return error (max 1 retry)
+                    return "Error: Retry after restart also failed with LSP termination"
+                else:
+                    # Non-termination LSP exception → re-raise for outer handler
+                    raise
+                    
+        except LSPRestartError as e:
+            # ERRORS-TEH-01: Restart itself failed
+            return f"Error: LSP restart failed - {e}"
+        except Exception as e:
+            # ERRORS-TEH-01: Unexpected failure during restart
+            return f"Error: LSP restart failed - {e}"
+
     def reset_language_server_manager(self) -> None:
         """
         Backward compatibility alias for reset_language_server().
