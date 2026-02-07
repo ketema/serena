@@ -161,8 +161,17 @@ class GlobalLanguageServerPool:
                 self.timeout_manager.touch(str(language))
 
                 # For multi-root, check if we need to add workspace
+                # SEQ-POOL-06: After add_workspace_root, probe readiness
                 if is_multi_root and not adapter.can_serve_path(lsp, workspace_root):
+                    # Contract SEQ-POOL-06: Call probe_workspace_readiness after add_workspace_root
+                    # for newly added workspaces
+                    # Source: REQ-2026-005, ACQUIRE_CHAIN, E-10, IP-3
                     adapter.add_workspace_root(lsp, workspace_root)
+                    
+                    # SEQ-POOL-06: Probe workspace readiness after adding new workspace
+                    # Failure mode: Tool calls dispatched to un-indexed workspace
+                    timeout_seconds = 30  # Default timeout from contract
+                    probe_workspace_readiness(lsp, workspace_root, timeout_seconds)
 
                 return lsp
 

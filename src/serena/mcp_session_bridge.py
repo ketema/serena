@@ -22,8 +22,11 @@ from collections.abc import Callable
 from contextvars import ContextVar, Token
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from serena.global_lsp_pool import GlobalLanguageServerPool
 
 from contracts.mcp_session_bridge_contract import (
     ANONYMOUS_SESSION_PREFIX,
@@ -53,9 +56,14 @@ class MCPSessionBridge(MCPSessionBridgeContract):
       Accessed from: async reaper (event loop) + sync tool dispatch (thread pool)
     """
 
-    def __init__(self, session_registry: SessionRegistry) -> None:
-        """Initialize bridge with session registry."""
+    def __init__(
+        self,
+        session_registry: SessionRegistry,
+        lsp_pool: "GlobalLanguageServerPool | None" = None,
+    ) -> None:
+        """Initialize bridge with session registry and optional LSP pool."""
         self._session_registry = session_registry
+        self._lsp_pool = lsp_pool
         # Track anonymous session creation times for TTL
         self._anonymous_sessions: dict[str, datetime] = {}
         # Lock for thread-safe access to _anonymous_sessions
@@ -116,7 +124,36 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         Remove MCP transport session from SessionRegistry.
 
         POST: Session removed (idempotent - silent no-op if already removed)
+        SEQ-POOL-05: Calls pool.release() for each language in session's lsp_references
         """
+        # SEQ-POOL-05: Release LSP references BEFORE unbinding session
+        # Contract: McpSessionBridge.on_transport_session_closed() MUST call
+        #           GlobalLanguageServerPool.release() for the session's language/root.
+        # Source: REQ-2026-005, CLEANUP_CHAIN, E-6, IP-4
+        if self._lsp_pool is not None:
+            # (1) Get session to access lsp_references
+            session = self._session_registry.get_session(mcp_session_id)
+            if session is not None:
+                # (2) Check workspace_root is not None (required for pool.release())
+                if session.workspace_root is not None:
+                    # (3) Iterate lsp_references.keys() - each key is a language string
+                    for language_str in session.lsp_references.keys():
+                        # (4) Map string key to Language enum
+                        try:
+                            from solidlsp.ls_config import Language
+                            language = Language[language_str.upper()]
+                            # (5) Call pool.release(language, workspace_root, session_id)
+                            self._lsp_pool.release(
+                                language,
+                                session.workspace_root,
+                                mcp_session_id,
+                            )
+                        except (KeyError, AttributeError) as e:
+                            # Graceful degradation if language string invalid
+                            logger.warning(
+                                f"Failed to map language '{language_str}' to enum: {e}"
+                            )
+
         # Unbind session (idempotent)
         self._session_registry.unbind_session(mcp_session_id)
 
