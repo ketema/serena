@@ -23,10 +23,10 @@ Clause Coverage Matrix:
 | SEQ-POOL-03    | test_seq_pool_03_acquire_touches_timeout                 |
 | SEQ-POOL-04    | test_seq_pool_04_release_touches_timeout                 |
 | SEQ-POOL-05    | test_seq_pool_05_session_close_calls_release             |
-| SEQ-POOL-06    | test_seq_pool_06_acquire_probes_readiness                |
-| SEQ-TEH-01     | test_seq_teh_01_apply_ex_calls_handle_lsp_termination    |
-| SEQ-TEH-02     | test_seq_teh_02_handler_calls_surgical_restart           |
-| SEQ-SR-01      | test_seq_sr_01_surgical_restart_restores_roots           |
+| SEQ-POOL-06    | test_seq_pool_06_acquire_probes_readiness                | SKIPPED (pending impl) |
+| SEQ-TEH-01     | test_seq_teh_01_apply_ex_calls_handle_lsp_termination    | SKIPPED (pending impl) |
+| SEQ-TEH-02     | test_seq_teh_02_handler_calls_surgical_restart           | Tier 3 (ABC double)    |
+| SEQ-SR-01      | test_seq_sr_01_surgical_restart_restores_roots           | Tier 3 (ABC double)    |
 +----------------+----------------------------------------------------------+
 
 REQ Traceability: REQ-2026-005, Phase 2.5 (E-1 through E-10, IP-1 through IP-6)
@@ -34,7 +34,8 @@ REQ Traceability: REQ-2026-005, Phase 2.5 (E-1 through E-10, IP-1 through IP-6)
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
+
+import pytest
 
 from contracts.lsp_lifecycle_authority_contract import (
     SurgicalRestartContract,
@@ -431,10 +432,6 @@ class TestSeqPool05SessionCloseCallsRelease:
         registry = SessionRegistry()
         bridge = MCPSessionBridge(session_registry=registry)
 
-        # Track whether release is called
-        release_called = False
-        original_release = None
-
         # We need to verify that on_transport_session_closed triggers pool.release.
         # Since the bridge doesn't currently hold a pool reference, this test
         # documents the SEQ obligation. The test verifies unbind_session is called
@@ -486,39 +483,28 @@ class TestSeqTeh01ApplyExCallsHandleLspTermination:
       [x] Mock injected at construction time
     """
 
+    @pytest.mark.skip(
+        reason="SEQ-TEH-01: apply_ex currently calls reset_language_server() (pool nuke). "
+        "Implementation must change to call handle_lsp_termination() (surgical restart). "
+        "This test will be unskipped when REQ-2026-005 implementation proceeds."
+    )
     def test_seq_teh_01_apply_ex_calls_handle_lsp_termination(self):
         """
         CONTRACT TRACEABILITY:
         - Contract: lsp_lifecycle_authority_contract.py → SEQ-TEH-01
         - Enforces: SEQ-TEH-01: apply_ex() MUST call handle_lsp_termination()
-        - Category: integration (Tier 1.5)
+        - Category: integration (Tier 1.5) — PENDING IMPLEMENTATION
         - Adversarial: Implementation-blind
+
+        STATUS: SKIPPED — current apply_ex calls reset_language_server() (Bug #1 anti-pattern).
+        This test documents the SEQ obligation. When apply_ex is changed to call
+        handle_lsp_termination(), unskip this test and verify the wiring.
         """
-        # This test verifies the wiring obligation in apply_ex.
-        # Currently apply_ex calls reset_language_server() (pool nuke) —
-        # SEQ-TEH-01 requires handle_lsp_termination() (surgical restart).
-        #
-        # We verify the CURRENT behavior violates SEQ-TEH-01 by checking
-        # that reset_language_server is called (the anti-pattern).
-        from solidlsp.ls_handler import SolidLSPException
-
-        mock_agent = MagicMock()
-        mock_agent.tool_is_active.return_value = True
-        mock_agent.get_active_project.return_value = MagicMock()
-        mock_agent.serena_config.tool_timeout = 30
-
-        # Create a mock exception that indicates LSP termination
-        lsp_exception = SolidLSPException("LSP terminated")
-        lsp_exception._is_language_server_terminated = True
-
-        # Track what gets called
-        mock_agent.reset_language_server = MagicMock()
-
-        # NOTE: This test documents the current VIOLATION.
-        # When implementation changes apply_ex to use handle_lsp_termination,
-        # this test should verify handle_lsp_termination is called instead.
-        #
-        # TODO(REQ-2026-005): Update test when apply_ex wiring is fixed
+        # TODO(REQ-2026-005): Unskip when apply_ex wiring changed to handle_lsp_termination
+        pytest.fail(
+            "SEQ-TEH-01 violation: apply_ex() calls reset_language_server() instead of "
+            "handle_lsp_termination(). Implementation change required."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -546,8 +532,12 @@ class TestSeqTeh02HandlerCallsSurgicalRestart:
         CONTRACT TRACEABILITY:
         - Contract: lsp_lifecycle_authority_contract.py → SEQ-TEH-02
         - Enforces: SEQ-TEH-02: handle_lsp_termination() MUST call surgical_restart_lsp()
-        - Category: integration (Tier 1.5)
+        - Category: Tier 3 (CONTRACT TRACEABILITY — enables SEQ-TEH-02)
         - Adversarial: Implementation-blind
+
+        NOTE: This test uses an ABC test-double because handle_lsp_termination()
+        does not yet exist on production classes. When implementation proceeds,
+        this should be upgraded to Tier 1.5 (test through real apply_ex lifecycle).
         """
         # Create a concrete implementation of the contract for testing
         class TestableHandler(ToolExceptionHandlerContract):
@@ -612,8 +602,13 @@ class TestSeqSr01SurgicalRestartRestoresRoots:
         CONTRACT TRACEABILITY:
         - Contract: lsp_lifecycle_authority_contract.py → SEQ-SR-01
         - Enforces: SEQ-SR-01: surgical_restart_lsp() MUST call add_workspace_root() per root
-        - Category: integration (Tier 1.5)
+        - Category: Tier 3 (CONTRACT TRACEABILITY — enables SEQ-SR-01)
         - Adversarial: Implementation-blind
+
+        NOTE: This test uses an ABC test-double because surgical_restart_lsp()
+        does not yet exist on production GlobalLanguageServerPool. When
+        implementation proceeds, this should be upgraded to Tier 1.5
+        (test through real pool.surgical_restart_lsp lifecycle).
         """
 
         class TestableSurgicalRestart(SurgicalRestartContract):
@@ -684,18 +679,25 @@ class TestSeqPool06AcquireProbesReadiness:
       [x] Mock injected at construction time
     """
 
+    @pytest.mark.skip(
+        reason="SEQ-POOL-06: acquire() does not yet call probe_workspace_readiness(). "
+        "Implementation must add readiness gate after add_workspace_root. "
+        "This test will be unskipped when REQ-2026-005 implementation proceeds."
+    )
     def test_seq_pool_06_acquire_probes_readiness(self):
         """
         CONTRACT TRACEABILITY:
         - Contract: lsp_lifecycle_authority_contract.py → SEQ-POOL-06
         - Enforces: SEQ-POOL-06: acquire() MUST call probe_workspace_readiness()
-        - Category: integration (Tier 1.5)
+        - Category: integration (Tier 1.5) — PENDING IMPLEMENTATION
         - Adversarial: Implementation-blind
+
+        STATUS: SKIPPED — acquire() does not yet wire probe_workspace_readiness().
+        This test documents the SEQ obligation. When the readiness gate is
+        wired into acquire(), unskip and verify the wiring.
         """
-        # NOTE: This SEQ obligation is not yet implemented.
-        # The test documents the requirement and will be updated when
-        # the readiness gate is wired into acquire().
-        #
-        # TODO(REQ-2026-005): Wire probe_workspace_readiness into acquire()
-        # and update this test to verify the actual wiring.
-        pass  # Placeholder — SEQ obligation documented, implementation pending
+        # TODO(REQ-2026-005): Unskip when probe_workspace_readiness wired into acquire()
+        pytest.fail(
+            "SEQ-POOL-06 violation: acquire() does not call probe_workspace_readiness() "
+            "after add_workspace_root(). Implementation change required."
+        )
