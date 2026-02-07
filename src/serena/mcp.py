@@ -485,6 +485,8 @@ class SerenaMCPFactory:
         Depends on SessionRegistry being initialized first.
 
         REQ-DCL-FIX: Uses simple lock without DCL pattern.
+        SEQ-POOL-05-FACTORY: Passes lsp_pool reference to bridge constructor
+                             to enable SEQ-POOL-05 cleanup chain.
 
         :return: The MCPSessionBridge singleton instance
         """
@@ -492,7 +494,10 @@ class SerenaMCPFactory:
         with self._lock:
             if self._session_bridge is None:
                 session_registry = self.get_session_registry()
-                self._session_bridge = MCPSessionBridge(session_registry)
+                # SEQ-POOL-05-FACTORY: Wire lsp_pool into bridge for cleanup chain
+                # Factory uses RLock (reentrant), so nested get_lsp_pool() call is safe
+                lsp_pool = self.get_lsp_pool()
+                self._session_bridge = MCPSessionBridge(session_registry, lsp_pool=lsp_pool)
             return self._session_bridge
 
     def get_lsp_pool(self) -> GlobalLanguageServerPool:
