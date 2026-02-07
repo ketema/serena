@@ -1,8 +1,10 @@
+import atexit
 import collections
 import glob
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -255,6 +257,17 @@ class TopLevelCommands(AutoRegisteringGroup):
                 "Positional project arg is deprecated; use --project instead. Used: %s",
                 project_file,
             )
+
+        # SEQ-SHUT-01: Register SIGTERM handler
+        def sigterm_handler(signum, frame):
+            log.info("SIGTERM received, initiating graceful shutdown")
+            factory.agent.shutdown()
+
+        signal.signal(signal.SIGTERM, sigterm_handler)
+
+        # SEQ-SHUT-04: Register atexit fallback
+        atexit.register(factory.agent.shutdown)
+
         log.info("Starting MCP server …")
         server.run(transport=transport)
 

@@ -2,10 +2,12 @@
 The Serena Model Context Protocol (MCP) Server
 """
 
+import atexit
 import multiprocessing
 import os
 import platform
 import sys
+import threading
 import uuid
 import webbrowser
 from collections.abc import Callable
@@ -210,6 +212,10 @@ class SerenaAgent:
         self._session_registry = session_registry if session_registry is not None else SessionRegistry()
         self._session_bridge = session_bridge
         self._lsp_pool = lsp_pool
+
+        # INV-SHUT-01, INV-SHUT-04: Shutdown idempotency via threading.Lock + flag
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_called = False
 
         # adjust log level
         serena_log_level = self.serena_config.log_level
@@ -936,18 +942,34 @@ class SerenaAgent:
     def shutdown(self, timeout: float = 2.0) -> None:
         """
         Shuts down the agent, freeing resources and stopping background tasks.
+
+        INV-SHUT-01, INV-SHUT-04: Idempotent via threading.Lock + flag.
+        Safe to call from signal handler and atexit.
         """
-        if not hasattr(self, "_is_initialized"):
-            return
-        log.info("SerenaAgent is shutting down ...")
-        current = get_current_session()
-        if current is not None:
-            log.info(f"Unbinding session {current.session_id}")
-            self.deactivate_session(current.session_id)
-        if self._gui_log_viewer:
-            log.info("Stopping the GUI log window ...")
-            self._gui_log_viewer.stop()
-            self._gui_log_viewer = None
+        # INV-SHUT-01: Idempotency check
+        with self._shutdown_lock:
+            if self._shutdown_called:
+                return  # Already shut down, no-op
+            self._shutdown_called = True
+
+        # ERR-SHUT-01: Catch exceptions to ensure cleanup completes
+        try:
+            log.info("SerenaAgent is shutting down ...")
+            current = get_current_session()
+            if current is not None:
+                log.info(f"Unbinding session {current.session_id}")
+                self.deactivate_session(current.session_id)
+
+            # SEQ-SHUT-02: Stop all LSPs with cache save
+            if self._lsp_pool is not None:
+                self._lsp_pool.stop_all(save_cache=True)
+
+            if hasattr(self, "_gui_log_viewer") and self._gui_log_viewer:
+                log.info("Stopping the GUI log window ...")
+                self._gui_log_viewer.stop()
+                self._gui_log_viewer = None
+        except Exception as e:
+            log.error(f"Error during shutdown: {e}", exc_info=True)
 
     def get_tool_by_name(self, tool_name: str) -> Tool:
         tool_class = ToolRegistry().get_tool_class_by_name(tool_name)

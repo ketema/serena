@@ -429,6 +429,7 @@ class GlobalLanguageServerPool:
         POST: All caches saved if save_cache=True
         POST: Pool empty
         POST: All session references cleared
+        POST: Monitoring stopped (SEQ-SHUT-03)
 
         Thread-safety: Acquires pool_lock.
         """
@@ -448,6 +449,9 @@ class GlobalLanguageServerPool:
             # Clear pool and references
             self._pool.clear()
             self._session_refs.clear()
+
+        # SEQ-SHUT-03: Stop monitoring AFTER all LSPs stopped
+        self.timeout_manager.stop_monitoring()
 
     def surgical_restart_lsp(self, language: Language) -> "SolidLanguageServer":
         """
