@@ -11,6 +11,8 @@ Contract Authority:
 
 Revision History:
     2026-02-06: Initial contracts from /design-by-contract (Phases 0-6 complete)
+    2026-02-06: Added SEQ clauses (SEQ-SR-01, SEQ-TEH-01/02, SEQ-POOL-01 through 06)
+                per constitutional-fix Finding #1 remediation
 """
 
 from abc import ABC, abstractmethod
@@ -59,6 +61,12 @@ class SurgicalRestartContract(ABC):
     - ERRORS-SR-01: Raises LSPRestartError if new LSP fails to start
     - ERRORS-SR-02: Raises LSPRestartError if workspace root restoration fails
                     (partial restoration is logged; all roots attempted)
+
+    SEQUENCING OBLIGATIONS (Integration Wiring):
+    - SEQ-SR-01: surgical_restart_lsp() MUST call adapter.add_workspace_root(new_lsp, root)
+                 for EACH workspace root from the crashed LSP's snapshot.
+                 Source: REQ-2026-005, ERROR_CHAIN, E-9, IP-6
+                 Temporal: During restart, after new LSP created, before pool entry replaced
     """
 
     @abstractmethod
@@ -249,6 +257,16 @@ class ToolExceptionHandlerContract(ABC):
                      return error message to client (do NOT retry)
     - ERRORS-TEH-02: If retry after restart also raises LanguageServerTerminatedException,
                      return error (do NOT restart again — prevent infinite loop)
+
+    SEQUENCING OBLIGATIONS (Integration Wiring):
+    - SEQ-TEH-01: Tool.apply_ex() MUST call handle_lsp_termination() when
+                  LanguageServerTerminatedException is caught (NOT reset_language_server()).
+                  Source: REQ-2026-005, ERROR_CHAIN, E-7, IP-5
+                  Temporal: In except block for LanguageServerTerminatedException
+    - SEQ-TEH-02: handle_lsp_termination() MUST call surgical_restart_lsp(language)
+                  (NOT reset_language_server() or GlobalLanguageServerPool()).
+                  Source: REQ-2026-005, ERROR_CHAIN, E-8, IP-5
+                  Temporal: Before retry, as first step of exception handling
     """
 
     @abstractmethod
@@ -390,6 +408,49 @@ class PoolIntegrityContract(ABC):
         ERRORS-PI-02: STDIO mode proceeds with warning
         """
         ...
+
+
+# ---------------------------------------------------------------------------
+# Contract 6: Integration Wiring (Cross-Cutting SEQ Obligations)
+# REQ: REQ-2026-005, Phase 2.5 Dependency Edge Enumeration
+# ---------------------------------------------------------------------------
+
+# These SEQ clauses define WHO calls WHOM and WHEN across component boundaries.
+# They are NOT behavioral contracts (PRE/POST/INV) — they are wiring obligations.
+# Each maps to a dependency edge (E-N) and integration point (IP-N) from Phase 2.5.
+#
+# SEQ-POOL-01: GlobalLanguageServerPool.__init__() MUST call
+#              timeout_manager.set_reclaim_callback(self._on_idle_timeout)
+#              during construction.
+#              Source: REQ-2026-005, INIT_CHAIN, E-1, IP-1
+#              Failure mode: Idle LSPs never reclaimed (memory leak)
+#
+# SEQ-POOL-02: GlobalLanguageServerPool.acquire() MUST call
+#              adapter.add_workspace_root(lsp, root) when the LSP is multi-root
+#              and the workspace is not yet served.
+#              Source: REQ-2026-005, ACQUIRE_CHAIN, E-3, IP-2
+#              Failure mode: Wrong LSP serves workspace; workspace not accessible
+#
+# SEQ-POOL-03: GlobalLanguageServerPool.acquire() MUST call
+#              timeout_manager.touch(language) after successful acquisition.
+#              Source: REQ-2026-005, ACQUIRE_CHAIN, E-4, IP-1
+#              Failure mode: Active LSPs incorrectly reclaimed as idle
+#
+# SEQ-POOL-04: GlobalLanguageServerPool.release() MUST call
+#              timeout_manager.touch(language) to update idle tracking.
+#              Source: REQ-2026-005, CLEANUP_CHAIN, E-5, IP-1
+#              Failure mode: Incorrect idle timing after release
+#
+# SEQ-POOL-05: McpSessionBridge.on_transport_session_closed() MUST call
+#              GlobalLanguageServerPool.release() for the session's language/root.
+#              Source: REQ-2026-005, CLEANUP_CHAIN, E-6, IP-4
+#              Failure mode: Ref count leak; LSPs never reclaimed after disconnect
+#
+# SEQ-POOL-06: GlobalLanguageServerPool.acquire() MUST call
+#              probe_workspace_readiness(lsp, root) after add_workspace_root
+#              for newly added workspaces.
+#              Source: REQ-2026-005, ACQUIRE_CHAIN, E-10, IP-3
+#              Failure mode: Tool calls dispatched to un-indexed workspace
 
 
 # ---------------------------------------------------------------------------
