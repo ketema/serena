@@ -381,6 +381,75 @@ class GlobalLanguageServerPool:
             self._pool.clear()
             self._session_refs.clear()
 
+    def surgical_restart_lsp(self, language: Language) -> "SolidLanguageServer":
+        """
+        Restart a single language's LSP instance, preserving workspace roots and session references.
+
+        PRE-SR-01: language is valid Language enum
+        POST-SR-01: Returns new running SolidLanguageServer instance
+        POST-SR-03: len(new_lsp.workspace_roots) == len(old_workspace_roots)
+        POST-SR-04: Session references unchanged
+        POST-SR-05: Other LSPs' workspace_roots unchanged
+        SEQ-SR-01: MUST call adapter.add_workspace_root(new_lsp, root) for EACH root
+        INV-SR-01: Restart affects ONLY target language
+        """
+        # Get adapter and pool key for target language
+        adapter = self.capability_registry.get_adapter(language)
+        pool_key: PoolKey = self.capability_registry.get_pool_key(language, None)
+
+        with self._pool_lock:
+            # POST-SR-01: Ensure LSP exists
+            if pool_key not in self._pool:
+                raise ValueError(f"No LSP found for language {language}")
+
+            old_lsp = self._pool[pool_key]
+
+            # POST-SR-03, SEQ-SR-01: Snapshot workspace roots BEFORE stopping
+            old_workspace_roots = list(old_lsp.workspace_roots)
+
+            # Stop old LSP
+            if old_lsp.is_running():
+                old_lsp.stop()
+
+            # POST-SR-01: Create new LSP instance
+            # Use first workspace root (or create with a temp root if none)
+            first_root = old_workspace_roots[0] if old_workspace_roots else Path.cwd()
+            new_lsp = self._create_lsp(language, first_root)
+
+            # INV-SR-01: Replace ONLY target language's LSP in pool
+            self._pool[pool_key] = new_lsp
+
+            # POST-SR-03, SEQ-SR-01: Restore ALL workspace roots
+            # Note: _create_lsp initializes workspace_roots with first_root,
+            # but tests may mock this behavior, so we restore all roots explicitly
+            for root in old_workspace_roots:
+                adapter.add_workspace_root(new_lsp, root)
+
+            # POST-SR-04: Session references preserved (no modification)
+            # POST-SR-05: Other LSPs unchanged (only modified pool_key entry)
+
+            return new_lsp
+
+    def get_workspace_roots_for_language(self, language: Language) -> list[Path]:
+        """
+        Get workspace roots for a language's LSP (read-only query).
+
+        PRE-SR-GWR-01: language is valid Language enum
+        POST-SR-GWR-01: Returns list[Path]
+        POST-SR-GWR-02: Does NOT modify pool state
+        """
+        # Get pool key for language
+        pool_key: PoolKey = self.capability_registry.get_pool_key(language, None)
+
+        with self._pool_lock:
+            # POST-SR-GWR-01: Return list (empty if LSP doesn't exist)
+            if pool_key in self._pool:
+                lsp = self._pool[pool_key]
+                # POST-SR-GWR-02: Read-only access
+                return list(lsp.workspace_roots)
+            else:
+                return []
+
     def _create_lsp(
         self,
         language: Language,
@@ -494,3 +563,68 @@ class GlobalLanguageServerPool:
                     logger.exception(
                         f"Error in reclaim callback for {pool_key}: {e}",
                     )
+
+def probe_workspace_readiness(
+    lsp: "SolidLanguageServer",
+    root: Path,
+    timeout_seconds: float
+) -> bool:
+    """
+    Probe LSP readiness by sending documentSymbol requests until ready or timeout.
+
+    PRE-WR-01: lsp is SolidLanguageServer instance
+    PRE-WR-02: root is valid workspace Path
+    PRE-WR-03: timeout_seconds > 0
+    POST-WR-01: Returns True when LSP returns valid non-empty response
+    POST-WR-02: Returns False when timeout elapsed
+    ERRORS-WR-01: Returns False (does not raise) if LSP crashes during probing
+    INV-WR-02: Readiness probe is non-destructive (read-only LSP request)
+    """
+    import time
+
+    start_time = time.time()
+
+    # INV-WR-02: Find a probeable file (non-destructive)
+    # Look for common source files based on language patterns
+    probeable_files = list(root.glob("**/*.py")) + list(root.glob("**/*.rs")) + list(root.glob("**/*.ts"))
+
+    if probeable_files:
+        # Use first real file found
+        probe_file = probeable_files[0]
+        file_uri = probe_file.as_uri()
+    else:
+        # No real files found - use synthetic probe file
+        # This allows testing with non-existent workspaces
+        probe_file = root / "probe.py"
+        file_uri = probe_file.as_uri()
+        logger.debug(f"No probeable files found in {root}, using synthetic URI: {file_uri}")
+
+    # POST-WR-02: Loop with backoff until timeout
+    backoff = 0.1
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed > timeout_seconds:
+            # POST-WR-02: Timeout elapsed
+            logger.debug(f"Workspace readiness probe timeout after {elapsed:.2f}s")
+            return False
+
+        try:
+            # INV-WR-02: Use read-only LSP request (textDocument/documentSymbol)
+            response = lsp.request(
+                "textDocument/documentSymbol",
+                {"textDocument": {"uri": file_uri}}
+            )
+
+            # POST-WR-01: Non-empty response means ready
+            if response and len(response) > 0:
+                logger.debug(f"Workspace ready: got {len(response)} symbols")
+                return True
+
+        except Exception as e:
+            # ERRORS-WR-01: Graceful degradation - log and return False
+            logger.warning(f"LSP crash during readiness probe: {e}")
+            return False
+
+        # Backoff with increasing intervals
+        time.sleep(backoff)
+        backoff = min(backoff * 1.5, 0.5)  # Cap at 0.5 seconds
