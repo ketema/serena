@@ -5,12 +5,16 @@ Contract: contracts/session_registry.contract.py
 Component: Multi-project session isolation for MCP servers
 """
 
+import logging
 import threading
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Optional
+
+# Logger for session registry operations
+logger = logging.getLogger(__name__)
 
 # Import from contracts to ensure alignment
 from contracts.issue6_constants import SESSION_DEFAULT_TTL_SECONDS
@@ -178,6 +182,10 @@ class SessionRegistry:
                     self._workspace_sessions[resolved_workspace] = []
                 self._workspace_sessions[resolved_workspace].append(session_id)
 
+            # LOG-REG-01: Emit INFO log when session successfully bound
+            short_id = session_id[:8]
+            logger.info(f"[Session: {short_id}] Bound to {resolved_workspace} (source: {source})")
+
             return ctx
 
     def unbind_session(self, session_id: str) -> None:
@@ -191,6 +199,9 @@ class SessionRegistry:
         with self._lock:
             # PRE-3: Silent no-op if session_id not in registry
             if session_id not in self._sessions:
+                # LOG-REG-02 (POST-NOOP): Emit DEBUG log when session_id not found
+                short_id = session_id[:8]
+                logger.debug(f"[Session: {short_id}] Unbind no-op: not in registry")
                 return
 
             # Get context before removing
@@ -200,6 +211,10 @@ class SessionRegistry:
             # Remove session from registry
             del self._sessions[session_id]
 
+            # LOG-REG-02: Emit INFO log when session removed
+            short_id = session_id[:8]
+            logger.info(f"[Session: {short_id}] Unbound from {workspace}")
+
             # Remove from workspace tracking (only if session had workspace bound)
             # INV-B1-02: Sessions with None workspace are not tracked in _workspace_sessions
             if workspace is not None and workspace in self._workspace_sessions:
@@ -207,6 +222,8 @@ class SessionRegistry:
 
                 # POST-3: Cleanup if last session for workspace
                 if len(self._workspace_sessions[workspace]) == 0:
+                    # LOG-REG-03: Emit INFO log when last session for workspace removed
+                    logger.info(f"[Session: {short_id}] Last session for {workspace}, workspace cleanup eligible")
                     del self._workspace_sessions[workspace]
                     # Cleanup hook would fire here in production
                     # For now, removing from tracking is sufficient

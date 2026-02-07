@@ -853,30 +853,45 @@ class SerenaAgent:
         from solidlsp.ls_exceptions import SolidLSPException
         
         try:
+            # LOG-EXC-01: Emit INFO log at start of restart
+            log.info(f"[LSP-Recovery] Surgical restart initiated for {language.value} LSP")
+
             # POST-TEH-01, SEQ-TEH-02: Surgical restart of terminated LSP
             new_lsp = self._lsp_pool.surgical_restart_lsp(language)
-            
+
             # POST-TEH-02: Wait for workspace readiness (workspace roots restored by surgical_restart_lsp)
             timeout_seconds = 5.0
             is_ready = probe_workspace_readiness(new_lsp, workspace_root, timeout_seconds)
-            
+
+            # LOG-EXC-02: Emit INFO (ready) or WARNING (timeout) after probe
+            if is_ready:
+                log.info(f"[LSP-Recovery] {language.value} LSP ready after restart (workspace: {workspace_root})")
+            else:
+                log.warning(f"[LSP-Recovery] {language.value} LSP not ready after {timeout_seconds}s (workspace: {workspace_root})")
+
             if not is_ready:
                 # ERRORS-TEH-01: Restart succeeded but LSP not ready
                 return f"Error: LSP restart succeeded but workspace not ready after {timeout_seconds}s"
-            
+
             # POST-TEH-03: Retry the original tool operation on restarted LSP
             try:
                 result = retry_fn()
+                # LOG-EXC-03 (POST-SUCCESS): Emit INFO log on retry success
+                log.info(f"[LSP-Recovery] Retry succeeded for {language.value} LSP")
                 return result
             except SolidLSPException as e:
                 if e.is_language_server_terminated():
+                    # LOG-EXC-03 (POST-TERMINATED): Emit WARNING log on retry failure
+                    log.warning(f"[LSP-Recovery] Retry failed for {language.value} LSP: second termination")
                     # ERRORS-TEH-02: Retry also raised termination → return error (max 1 retry)
                     return "Error: Retry after restart also failed with LSP termination"
                 else:
                     # Non-termination LSP exception → re-raise for outer handler
                     raise
-                    
+
         except LSPRestartError as e:
+            # LOG-EXC-04: Emit ERROR log when LSPRestartError caught
+            log.error(f"[LSP-Recovery] Restart failed for {language.value} LSP: {e}")
             # ERRORS-TEH-01: Restart itself failed
             return f"Error: LSP restart failed (LSPRestartError) - {e}"
         except Exception as e:
@@ -968,6 +983,10 @@ class SerenaAgent:
                 # HTTP mode: Session created without workspace, now binding via activate_project
                 self._session_registry.unbind_session(session_id)
             elif Path(existing_session.workspace_root).resolve() != workspace_root.resolve():
+                # LOG-REG-04 (POST-REBIND): Emit INFO log when re-binding workspaces
+                short_id = session_id[:8]
+                old_workspace = existing_session.workspace_root
+                log.info(f"[Session: {short_id}] Re-binding from {old_workspace} to {workspace_root}")
                 # Re-binding to different workspace
                 self._session_registry.unbind_session(session_id)
             else:
@@ -984,6 +1003,10 @@ class SerenaAgent:
             self._session_registry.unbind_session(session_id)
             set_current_session(None)
             raise ProjectNotFoundError("Failed to load project for session.") from exc
+
+        # LOG-REG-04: Emit INFO log after successful project activation
+        short_id = session_id[:8]
+        log.info(f"[Session: {short_id}] Activated project at {workspace_root} (source: {source})")
 
         # INV-B3-01: MUST NOT call _update_active_tools() on shared Agent
         # INV-B2-01: _active_tools dict MUST NOT be mutated by activate_project
@@ -1004,6 +1027,8 @@ class SerenaAgent:
             set_current_session(None)
 
         if current is not None:
+            # LOG-REG-05: Count LSP references cleared for logging
+            lsp_count = 0
             for lang_name in list(current.lsp_references.keys()):
                 try:
                     language = Language[lang_name.upper()]
@@ -1011,7 +1036,12 @@ class SerenaAgent:
                     continue
                 if current.workspace_root is not None:
                     self.get_lsp_pool().release(language, current.workspace_root, session_id)
+                    lsp_count += 1
             current.lsp_references.clear()
+
+            # LOG-REG-05: Emit INFO log with LSP cleanup count
+            short_id = session_id[:8]
+            log.info(f"[Session: {short_id}] Deactivated (released {lsp_count} LSP reference(s))")
 
         self._session_registry.unbind_session(session_id)
 

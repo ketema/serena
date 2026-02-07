@@ -308,6 +308,13 @@ class Tool(Component):
 
                                 # POST-TEH-03: handle_lsp_termination handles restart + retry, returns result or error
                                 result = self.agent.handle_lsp_termination(language, workspace_root, retry_fn)
+
+                                # LOG-EXC-05: Emit INFO log showing recovery outcome
+                                tool_name = self.get_name_from_cls()
+                                if result.startswith("Error:"):
+                                    log.info(f"[Tool] {tool_name}: LSP recovery returned error")
+                                else:
+                                    log.info(f"[Tool] {tool_name}: LSP recovery succeeded")
                     else:
                         raise
 
