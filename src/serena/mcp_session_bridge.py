@@ -130,6 +130,10 @@ class MCPSessionBridge(MCPSessionBridgeContract):
         # Contract: McpSessionBridge.on_transport_session_closed() MUST call
         #           GlobalLanguageServerPool.release() for the session's language/root.
         # Source: REQ-2026-005, CLEANUP_CHAIN, E-6, IP-4
+
+        # Compute short_id for LOG-1 session prefix
+        short_id = mcp_session_id[:8]
+
         if self._lsp_pool is not None:
             # (1) Get session to access lsp_references
             session = self._session_registry.get_session(mcp_session_id)
@@ -142,6 +146,12 @@ class MCPSessionBridge(MCPSessionBridgeContract):
                         # (4) Map string key to Language enum
                         try:
                             language = Language[language_str.upper()]
+
+                            # LOG-BRIDGE-01: Per-language release
+                            logger.info(
+                                f"[Session: {short_id}] Releasing {language_str.lower()} LSP for {session.workspace_root}"
+                            )
+
                             # (5) Call pool.release(language, workspace_root, session_id)
                             self._lsp_pool.release(
                                 language,
@@ -153,6 +163,11 @@ class MCPSessionBridge(MCPSessionBridgeContract):
                             logger.warning(
                                 f"Failed to map language '{language_str}' to enum: {e}"
                             )
+        else:
+            # LOG-BRIDGE-02: No pool available
+            logger.debug(
+                f"[Session: {short_id}] No LSP pool available, skipping LSP cleanup"
+            )
 
         # Unbind session (idempotent)
         self._session_registry.unbind_session(mcp_session_id)

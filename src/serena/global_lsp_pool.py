@@ -178,6 +178,12 @@ class GlobalLanguageServerPool:
                             f"(degraded mode: returning LSP anyway)"
                         )
 
+                # LOG-POOL-01: Successful acquisition (shared mode)
+                logger.info(
+                    f"[LSP-Pool] Acquired {str(language).lower()} LSP for {workspace_root} "
+                    f"(Session: {session_id}, Mode: shared)"
+                )
+
                 return lsp
 
             # No existing LSP - create new instance
@@ -193,6 +199,12 @@ class GlobalLanguageServerPool:
 
             # Touch timeout manager (mark as recently used)
             self.timeout_manager.touch(str(language))
+
+            # LOG-POOL-01: Successful acquisition (new mode)
+            logger.info(
+                f"[LSP-Pool] Acquired {str(language).lower()} LSP for {workspace_root} "
+                f"(Session: {session_id}, Mode: new)"
+            )
 
             return lsp
 
@@ -225,11 +237,23 @@ class GlobalLanguageServerPool:
         with self._pool_lock:
             # PRE-3: Silent no-op if pool_key not in pool (idempotent)
             if pool_key not in self._session_refs:
+                # LOG-POOL-02 POST-NOOP: Pool key not found (idempotent no-op)
+                logger.debug(
+                    f"[LSP-Pool] Release no-op: {str(language).lower()} LSP for {workspace_root} "
+                    f"not in pool (Session: {session_id})"
+                )
                 return
 
             # Remove session reference
             if session_id in self._session_refs[pool_key]:
                 self._session_refs[pool_key].remove(session_id)
+
+                # LOG-POOL-02: Session reference released
+                ref_count = len(self._session_refs[pool_key])
+                logger.info(
+                    f"[LSP-Pool] Released {str(language).lower()} LSP for {workspace_root} "
+                    f"(Session: {session_id}, Remaining refs: {ref_count})"
+                )
 
             # If no more sessions, handle cleanup
             if len(self._session_refs[pool_key]) == 0:
@@ -249,6 +273,12 @@ class GlobalLanguageServerPool:
                 else:
                     # Fallback to existing LSPTimeoutManager.touch() interface
                     self.timeout_manager.touch(str(language))
+
+                # LOG-POOL-02 POST-ZERO: Zero references, idle timer started
+                logger.info(
+                    f"[LSP-Pool] {str(language).lower()} LSP for {workspace_root} has zero references, "
+                    f"starting idle timer"
+                )
 
     def get_lsp(
         self,
@@ -395,6 +425,11 @@ class GlobalLanguageServerPool:
         Thread-safety: Acquires pool_lock.
         """
         with self._pool_lock:
+            # LOG-POOL-04: Pool shutdown
+            logger.info(
+                f"[LSP-Pool] Stopping all LSPs ({len(self._pool)} instances, save_cache={save_cache})"
+            )
+
             # Stop all LSPs
             for lsp in self._pool.values():
                 if lsp.is_running():
@@ -432,6 +467,12 @@ class GlobalLanguageServerPool:
             # POST-SR-03, SEQ-SR-01: Snapshot workspace roots BEFORE stopping
             old_workspace_roots = list(old_lsp.workspace_roots)
 
+            # LOG-POOL-03 POST-START: Surgical restart starting
+            logger.info(
+                f"[LSP-Pool] Surgical restart: stopping {str(language).lower()} LSP "
+                f"(workspace_roots: {len(old_workspace_roots)})"
+            )
+
             # Stop old LSP
             if old_lsp.is_running():
                 old_lsp.stop()
@@ -452,6 +493,12 @@ class GlobalLanguageServerPool:
 
             # POST-SR-04: Session references preserved (no modification)
             # POST-SR-05: Other LSPs unchanged (only modified pool_key entry)
+
+            # LOG-POOL-03 POST-COMPLETE: Surgical restart complete
+            logger.info(
+                f"[LSP-Pool] Surgical restart complete: {str(language).lower()} LSP restarted, "
+                f"{len(old_workspace_roots)} workspace root(s) restored"
+            )
 
             return new_lsp
 
@@ -580,7 +627,18 @@ class GlobalLanguageServerPool:
 
         # Invoke reclaim callback for each key
         for pool_key in keys_to_reclaim:
-            workspace_root = Path("/") if isinstance(pool_key, Language) else pool_key[1]
+            # Get workspace_root from LSP's workspace_roots set (first element)
+            lsp = self._pool.get(pool_key)
+            if lsp and hasattr(lsp, 'workspace_roots') and lsp.workspace_roots:
+                workspace_root = next(iter(lsp.workspace_roots))
+            else:
+                workspace_root = Path("/") if isinstance(pool_key, Language) else pool_key[1]
+
+            # LOG-POOL-05: Idle reclamation
+            logger.info(
+                f"[LSP-Pool] Reclaiming idle {str(language).lower()} LSP for {workspace_root}"
+            )
+
             if self._reclaim_callback is not None:
                 try:
                     self._reclaim_callback(language, workspace_root)
