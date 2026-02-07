@@ -94,6 +94,94 @@ Full Actor Responsibility Model: →serena:ccabdd-manifesto
 | Probe-based readiness | Hybrid (delay then probe) | Unnecessary complexity; probe alone with retry loop achieves same result |
 | Surgical restart | Keep pool-wide restart | Violates INV-01, INV-03 — proven cascade failure in live testing |
 
+## 5.6 Phase 2.5: Dependency Edge Enumeration (Integration Wiring)
+
+### Component Dependency Graph
+
+**Nodes** (components):
+- `GlobalLanguageServerPool` — LSP instance management with pooling
+- `LSPTimeoutManager` — Idle timeout monitoring + reclamation
+- `LSPCapabilityAdapter` (via `LSPAdapterRegistry`) — Multi/single-root routing + workspace management
+- `McpSessionBridge` — MCP transport session lifecycle
+- `Tool.apply_ex()` — Tool dispatch with exception handling
+- `SerenaAgent` — Agent lifecycle, pool ownership
+- `probe_workspace_readiness()` — Readiness gate for new workspaces
+- `surgical_restart_lsp()` — Per-language surgical restart
+
+**Edges** (dependency relationships — each is a potential wiring failure point):
+
+| Edge ID | Caller | Callee | When | Category |
+|---------|--------|--------|------|----------|
+| E-1 | `GlobalLanguageServerPool.__init__()` | `LSPTimeoutManager.set_reclaim_callback()` | Pool construction | INIT |
+| E-2 | `GlobalLanguageServerPool.acquire()` | `LSPAdapterRegistry.get_adapter()` | Session needs LSP | OPERATION |
+| E-3 | `GlobalLanguageServerPool.acquire()` | `adapter.add_workspace_root(lsp, root)` | Multi-root, new workspace | OPERATION |
+| E-4 | `GlobalLanguageServerPool.acquire()` | `LSPTimeoutManager.touch(language)` | LSP accessed | OPERATION |
+| E-5 | `GlobalLanguageServerPool.release()` | `LSPTimeoutManager.touch(language)` | Session releases LSP | CLEANUP |
+| E-6 | `McpSessionBridge.on_transport_session_closed()` | `GlobalLanguageServerPool.release()` | Transport disconnects | CLEANUP |
+| E-7 | `Tool.apply_ex()` | `handle_lsp_termination()` | LSP crashed during tool | ERROR |
+| E-8 | `handle_lsp_termination()` | `surgical_restart_lsp(language)` | Restarting crashed LSP | ERROR |
+| E-9 | `surgical_restart_lsp()` | `adapter.add_workspace_root(new_lsp, root)` | Restoring roots after restart | ERROR |
+| E-10 | `acquire()` (new workspace) | `probe_workspace_readiness(lsp, root)` | Readiness gate | OPERATION |
+
+### Integration Points (IP)
+
+| IP ID | Integration Point | Components Involved | Failure Mode if Unwired |
+|-------|-------------------|---------------------|------------------------|
+| IP-1 | Pool init → timeout setup | Pool, TimeoutManager | Idle LSPs never reclaimed (memory leak) |
+| IP-2 | Acquire → workspace routing | Pool, AdapterRegistry | Wrong LSP serves workspace |
+| IP-3 | Acquire → readiness gate | Pool, probe_workspace_readiness | Tool calls dispatched to un-indexed workspace |
+| IP-4 | Session close → pool release | McpSessionBridge, Pool | Ref count leak, LSPs never reclaimed |
+| IP-5 | Tool exception → surgical restart | apply_ex, handle_lsp_termination, surgical_restart_lsp | Pool nuke instead of surgical restart |
+| IP-6 | Surgical restart → root restoration | surgical_restart_lsp, adapter.add_workspace_root | Workspaces lost after restart |
+
+### Sequencing Chains
+
+**INIT_CHAIN** (Pool construction):
+```
+GlobalLanguageServerPool.__init__()
+  → LSPTimeoutManager() (create)
+  → timeout_manager.set_reclaim_callback(self._on_idle_timeout)  [E-1]
+```
+
+**ACQUIRE_CHAIN** (Session requests LSP):
+```
+GlobalLanguageServerPool.acquire(language, workspace_root, session_id)
+  → capability_registry.get_adapter(language)  [E-2]
+  → adapter.add_workspace_root(lsp, root)  [E-3, if multi-root + new root]
+  → timeout_manager.touch(language)  [E-4]
+  → probe_workspace_readiness(lsp, root)  [E-10, if new workspace]
+```
+
+**CLEANUP_CHAIN** (Session disconnects):
+```
+McpSessionBridge.on_transport_session_closed(session_id)
+  → GlobalLanguageServerPool.release(language, root, session_id)  [E-6]
+  → timeout_manager.touch(language)  [E-5]
+  → (if ref_count == 0) idle timer starts → _on_idle_timeout → reclaim
+```
+
+**ERROR_CHAIN** (LSP crashes during tool):
+```
+Tool.apply_ex(**kwargs)
+  → catches LanguageServerTerminatedException
+  → handle_lsp_termination(language, root, retry_fn)  [E-7]
+  → surgical_restart_lsp(language)  [E-8]
+  → adapter.add_workspace_root(new_lsp, root) for each root  [E-9]
+  → probe_workspace_readiness(new_lsp, root)
+  → retry_fn() (retry original tool call)
+```
+
+### Phase 2.5 Completeness Checklist
+
+- [x] All component dependencies graphed (8 nodes, 10 edges)
+- [x] Every dependency edge has a SEQ clause placeholder (E-1 through E-10)
+- [x] Sequencing chains documented (INIT_CHAIN, ACQUIRE_CHAIN, CLEANUP_CHAIN, ERROR_CHAIN)
+- [x] Integration points enumerated with IDs (IP-1 through IP-6)
+- [x] Every IP has corresponding SEQ-N placeholder for /design-by-contract
+- [x] Lifecycle paths complete for ALL components (INIT + CLEANUP minimum)
+
+---
+
 ## 6. Tool/API Interface Summary
 
 | Interface | Purpose | Mutates State? | Change Required |
@@ -152,3 +240,4 @@ src/serena/tools/symbol_tools.py (RestartLanguageServerTool HTTP guard)
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-02-06 | ketema + AI | Initial manifest from /req-elicit (Phases 0-6) |
+| 2026-02-06 | AI (constitutional-fix) | Added Phase 2.5 completeness: dependency edges, IPs, sequencing chains |
