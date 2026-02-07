@@ -171,7 +171,12 @@ class GlobalLanguageServerPool:
                     # SEQ-POOL-06: Probe workspace readiness after adding new workspace
                     # Failure mode: Tool calls dispatched to un-indexed workspace
                     timeout_seconds = 30  # Default timeout from contract
-                    probe_workspace_readiness(lsp, workspace_root, timeout_seconds)
+                    is_ready = probe_workspace_readiness(lsp, workspace_root, timeout_seconds)
+                    if not is_ready:
+                        logger.warning(
+                            f"Workspace '{workspace_root}' not ready after {timeout_seconds}s "
+                            f"(degraded mode: returning LSP anyway)"
+                        )
 
                 return lsp
 

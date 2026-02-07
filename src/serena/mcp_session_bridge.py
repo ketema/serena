@@ -136,11 +136,11 @@ class MCPSessionBridge(MCPSessionBridgeContract):
             if session is not None:
                 # (2) Check workspace_root is not None (required for pool.release())
                 if session.workspace_root is not None:
-                    # (3) Iterate lsp_references.keys() - each key is a language string
-                    for language_str in session.lsp_references.keys():
+                    # (3) Iterate lsp_references.keys() - snapshot copy for thread safety (AI Panel REC2)
+                    from solidlsp.ls_config import Language
+                    for language_str in list(session.lsp_references.keys()):
                         # (4) Map string key to Language enum
                         try:
-                            from solidlsp.ls_config import Language
                             language = Language[language_str.upper()]
                             # (5) Call pool.release(language, workspace_root, session_id)
                             self._lsp_pool.release(
