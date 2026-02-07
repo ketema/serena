@@ -878,10 +878,11 @@ class SerenaAgent:
                     
         except LSPRestartError as e:
             # ERRORS-TEH-01: Restart itself failed
-            return f"Error: LSP restart failed - {e}"
+            return f"Error: LSP restart failed (LSPRestartError) - {e}"
         except Exception as e:
             # ERRORS-TEH-01: Unexpected failure during restart
-            return f"Error: LSP restart failed - {e}"
+            log.exception("Unexpected error during LSP restart")
+            return f"Error: Unexpected failure during LSP restart - {type(e).__name__}: {e}"
 
     def reset_language_server_manager(self) -> None:
         """

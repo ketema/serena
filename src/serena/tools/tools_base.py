@@ -284,20 +284,30 @@ class Tool(Component):
                         # SEQ-TEH-01: Call handle_lsp_termination (surgical restart) instead of reset_language_server
                         log.info(f"Language server terminated while executing tool ({e}). Performing surgical restart ...")
 
-                        # Extract language from exception.cause.language
-                        language = e.cause.language
-
-                        # Get workspace root from active project
+                        # Extract language from exception cause chain (type-safe)
+                        from solidlsp.ls_handler import LanguageServerTerminatedException
                         from pathlib import Path
-                        project = self.agent.get_active_project()
-                        workspace_root = Path(project.project_root)
+                        if not isinstance(e.cause, LanguageServerTerminatedException):
+                            log.error(f"LSP termination without valid cause chain: {e}")
+                            result = "Error: LSP terminated but cause chain incomplete"
+                        else:
+                            language = e.cause.language
 
-                        # Create retry callable
-                        def retry_fn():
-                            return apply_fn(**kwargs)
+                            # Get workspace root from active project (null-safe)
+                            project = self.agent.get_active_project()
+                            if project is None:
+                                log.error("Cannot perform surgical restart: no active project")
+                                result = "Error: LSP restart requires an active project workspace"
+                            else:
+                                workspace_root = Path(project.project_root)
 
-                        # POST-TEH-03: handle_lsp_termination handles restart + retry, returns result or error
-                        result = self.agent.handle_lsp_termination(language, workspace_root, retry_fn)
+                                # Create retry callable with frozen kwargs snapshot
+                                frozen_kwargs = dict(kwargs)
+                                def retry_fn():
+                                    return apply_fn(**frozen_kwargs)
+
+                                # POST-TEH-03: handle_lsp_termination handles restart + retry, returns result or error
+                                result = self.agent.handle_lsp_termination(language, workspace_root, retry_fn)
                     else:
                         raise
 
